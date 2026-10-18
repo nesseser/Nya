@@ -1,4 +1,4 @@
---// ADMIN PANEL v7 (tek LocalScript) -> StarterPlayerScripts
+--// HUNTER-PANEL (tek LocalScript) -> StarterPlayerScripts
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -8,7 +8,15 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LogService = game:GetService("LogService")
 local TextChatService = game:GetService("TextChatService")
 
-local ALLOWED_IDS = {} -- bos = herkes. Sadece sen: {123456789}
+------------------------------------------------------------------
+-- AYARLAR (burayi doldur)
+------------------------------------------------------------------
+local PANEL_NAME = "HUNTER-PANEL"
+local BG_IMAGE_ID = "" -- kedi anime kizi gorselinin Roblox ID'si (sadece rakam)
+local SOUND_ID = ""    -- uyari sesinin Roblox ID'si (bos = varsayilan bip)
+local DEFAULT_THEME = 7 -- 7 = Sakura (Anime)
+local ALLOWED_IDS = {}  -- bos = herkes. Sadece sen: {123456789}
+
 local player = Players.LocalPlayer
 if #ALLOWED_IDS > 0 and not table.find(ALLOWED_IDS, player.UserId) then return end
 
@@ -42,7 +50,7 @@ local T = {
 	info = rgb(96,165,250), purple = rgb(192,132,252), orange = rgb(251,146,60),
 	alpha = 0, alphaBg = 0, deco = "",
 }
-for k, v in pairs(THEMES[1]) do
+for k, v in pairs(THEMES[DEFAULT_THEME]) do
 	if k ~= "name" then T[k] = v end
 end
 
@@ -82,7 +90,7 @@ local function new(class, props, parent)
 	if parent then o.Parent = parent end
 	return o
 end
-local function round(o, r) new("UICorner", { CornerRadius = UDim.new(0, r or 8) }, o) end
+local function round(o, r) new("UICorner", { CornerRadius = UDim.new(0, math.min(r or 8, 3)) }, o) end
 local function stroke(o, c, t)
 	return new("UIStroke", { Color = c or T.stroke, Thickness = t or 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border }, o)
 end
@@ -112,7 +120,7 @@ local S = {
 	hbViz = false,
 	logClient = false,
 	soundOn = true, soundVol = 0.6,
-	bgId = "", bgTrans = 0.35,
+	bgId = BG_IMAGE_ID, bgTrans = 0.35,
 }
 local DEFAULT_GRAVITY = workspace.Gravity
 local DEFAULT_FOV = camera.FieldOfView
@@ -139,7 +147,7 @@ end
 -- ANA PENCERE
 ------------------------------------------------------------------
 local gui = new("ScreenGui", {
-	Name = "AdminPanel", ResetOnSpawn = false, DisplayOrder = 999,
+	Name = "HunterPanel", ResetOnSpawn = false, DisplayOrder = 999,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, player:WaitForChild("PlayerGui"))
 
@@ -166,7 +174,7 @@ local titleLbl = new("TextLabel", {
 	TextColor3 = T.text, Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
 }, titleBar)
 local function updateTitle()
-	titleLbl.Text = "⚡  Admin Panel  <font color='#" .. T.sub:ToHex() .. "' size='11'>v7  •  K gizle/göster</font>"
+	titleLbl.Text = "⚡  " .. PANEL_NAME .. "  <font color='#" .. T.sub:ToHex() .. "' size='11'>•  K gizle/göster</font>"
 		.. (T.deco ~= "" and ("<font color='#" .. T.accent:ToHex() .. "'>" .. T.deco .. "</font>") or "")
 end
 updateTitle()
@@ -229,7 +237,10 @@ floatBtn.MouseButton1Click:Connect(function() main.Visible = not main.Visible en
 -- SES + BILDIRIM
 ------------------------------------------------------------------
 local DEFAULT_SOUND = "rbxasset://sounds/electronicpingshort.wav"
-local alertSound = new("Sound", { SoundId = DEFAULT_SOUND, Volume = S.soundVol }, gui)
+local alertSound = new("Sound", {
+	SoundId = SOUND_ID:match("%d+") and ("rbxassetid://" .. SOUND_ID:match("%d+")) or DEFAULT_SOUND,
+	Volume = S.soundVol,
+}, gui)
 local lastAlert = 0
 local function playAlert(danger, force)
 	if not S.soundOn and not force then return end
@@ -978,7 +989,7 @@ do
 	end
 end
 addSection(pSet, "Arka plan görseli (anime vb.)")
-addTextBox(pSet, "Görsel ID:", "", function(t)
+addTextBox(pSet, "Görsel ID:", S.bgId, function(t)
 	S.bgId = t
 	setBgImage()
 	if t ~= "" and not t:match("%d+") then notify("Geçersiz ID", "warn") end
@@ -988,7 +999,7 @@ addSlider(pSet, "Görsel saydamlığı (0 = net)", 0, 1, S.bgTrans, function(v)
 	bgImage.ImageTransparency = v
 end, 0.05)
 addSection(pSet, "Uyarı sesi")
-addTextBox(pSet, "Özel ses ID:", "", function(t)
+addTextBox(pSet, "Özel ses ID:", SOUND_ID, function(t)
 	local id = t:match("%d+")
 	alertSound.SoundId = id and ("rbxassetid://" .. id) or DEFAULT_SOUND
 end)
@@ -1191,5 +1202,6 @@ end
 player.CharacterAdded:Connect(setupChar)
 if player.Character then task.spawn(hookDeath, player.Character) end
 
-notify("Admin Panel yüklendi  •  K ile aç/kapat", "ok")
-addLog("panel", "Panel yüklendi")
+setBgImage()
+notify(PANEL_NAME .. " yüklendi  •  K ile aç/kapat", "ok")
+addLog("panel", PANEL_NAME .. " yüklendi")
