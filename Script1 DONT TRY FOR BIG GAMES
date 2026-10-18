@@ -3,6 +3,30 @@
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
+local function disableTouch(character)
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.CanTouch = false
+        end
+    end
+
+    character.DescendantAdded:Connect(function(part)
+        if part:IsA("BasePart") then
+            part.CanTouch = false
+        end
+    end)
+end
+
+if player.Character then
+    disableTouch(player.Character)
+end
+
+player.CharacterAdded:Connect(disableTouch)
+
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
 local character = player.Character
     or player.CharacterAdded:Wait()
 
