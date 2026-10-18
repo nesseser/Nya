@@ -1,4 +1,27 @@
 --// HUNTER-PANEL (tek LocalScript) -> StarterPlayerScripts
+
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+
+local character = player.Character
+    or player.CharacterAdded:Wait()
+
+character.Archivable = true
+
+local dummy = character:Clone()
+dummy.Name = "LocalDummy"
+
+for _, obj in ipairs(dummy:GetDescendants()) do
+    if obj:IsA("Script") or obj:IsA("LocalScript") then
+        obj:Destroy()
+    elseif obj:IsA("BasePart") then
+        obj.Anchored = true
+        obj.CanCollide = false
+    end
+end
+
+dummy.Parent = workspace
+dummy:PivotTo(character:GetPivot() * CFrame.new(0, 0, -5000))
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
