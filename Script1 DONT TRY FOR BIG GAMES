@@ -126,6 +126,7 @@ local S = {
 	bgId = BG_IMAGE_ID, bgTrans = 0.35,
 	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
 	antiSlip = false, noTouch = true,
+	autoHeal = false, healInterval = 0.1,
 	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
 	noEntDmg = false, flee = false, fleeDist = 25,
 	infStamina = false, fastPrompt = false, farPrompt = false, antiAfk = true,
@@ -310,7 +311,16 @@ local notifyHolder = new("Frame", {
 }, gui)
 new("UIListLayout", { VerticalAlignment = Enum.VerticalAlignment.Bottom, Padding = UDim.new(0, 6) }, notifyHolder)
 
-local function notify(text, kind)
+-- ayni anahtarla tekrar gelen bildirimler tek satirda birlesir: "... x16"
+local notifyActive = {}
+local function notify(text, kind, key, shortText)
+	local act = key and notifyActive[key]
+	if act and act.f.Parent and os.clock() - act.t < 4 then
+		act.n += 1
+		act.t = os.clock()
+		act.lbl.Text = (shortText or text) .. "  x" .. act.n
+		return act
+	end
 	local color = ({ ok = T.ok, warn = T.warn, bad = T.bad, info = T.info, entity = T.orange })[kind or "info"] or T.info
 	local f = new("Frame", {
 		Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = T.panel, BackgroundTransparency = 1,
@@ -326,14 +336,20 @@ local function notify(text, kind)
 	tween(f, 0.2, { BackgroundTransparency = 0.05 })
 	tween(lbl, 0.2, { TextTransparency = 0 })
 	tween(st, 0.2, { Transparency = 0 })
-	task.delay(4, function()
+	local entry = { f = f, lbl = lbl, n = 1, t = os.clock() }
+	if key then notifyActive[key] = entry end
+	local function fade()
 		if not f.Parent then return end
+		local left = 4 - (os.clock() - entry.t)
+		if left > 0.05 then task.delay(left, fade); return end
 		tween(f, 0.25, { BackgroundTransparency = 1 })
 		tween(lbl, 0.25, { TextTransparency = 1 })
 		tween(st, 0.25, { Transparency = 1 })
 		task.wait(0.3)
 		f:Destroy()
-	end)
+	end
+	task.delay(4, fade)
+	return entry
 end
 
 ------------------------------------------------------------------
@@ -746,6 +762,13 @@ local function untrackEntity(inst)
 end
 local function clearEntities() for i in pairs(ents) do untrackEntity(i) end end
 
+-- her zaman yok sayilan isimler (kayitli ayarlar bunu ezemez)
+local BUILTIN_IGNORE = "frame,knob,hinge,doorway,jamb,trim,handle,hitbox,hurtbox,terrain,camera,baseplate,spawnlocation,"
+	.. "wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window,panel,cube,mesh,decal,glow,sign,start_,end_"
+local function ignored(name)
+	return listHas(BUILTIN_IGNORE, name) or listHas(S.entIgnore, name)
+end
+
 -- hangi tur? entity = humanoid / tehlikeli isim, door, hide (dolap vb.), item
 local function classify(inst)
 	if inst:IsA("Terrain") then return nil end
@@ -756,7 +779,7 @@ local function classify(inst)
 			if S.entItem and inst.Parent and not inst.Parent:FindFirstChildOfClass("Humanoid") then return "item" end
 			return nil
 		end
-		if inst:IsA("BasePart") and not listHas(S.entIgnore, name) then
+		if inst:IsA("BasePart") and not ignored(name) then
 			if S.entDoor and listHas(S.entDoors, name) then return "door" end
 			if S.entItem and listHas(S.entItems, name) then return "item" end
 			if S.entChest and listHas(S.entChests, name) then return "chest" end
@@ -764,7 +787,7 @@ local function classify(inst)
 		return nil
 	end
 	if Players:GetPlayerFromCharacter(inst) then return nil end
-	if listHas(S.entIgnore, name) then return nil end
+	if ignored(name) then return nil end
 	if inst:FindFirstChildOfClass("Humanoid") then return "entity", listHas(S.entDanger, name) end
 	if listHas(S.entDanger, name) then return "entity", true end
 	if S.entDoor and listHas(S.entDoors, name) then return "door" end
@@ -799,7 +822,9 @@ local function trackEntity(inst, silent)
 	local color = cat == "entity" and (danger and T.bad or T.orange)
 		or cat == "door" and T.info or cat == "hide" and T.ok or cat == "chest" and T.purple or T.warn
 	local o = { part = part, cat = cat, color = color }
-	o.text = (danger and "☠ " or CAT_ICON[cat]) .. inst.Name
+	local shown = cat == "door" and "Kapı" or inst.Name
+	if #shown > 18 then shown = shown:sub(1, 16) .. "…" end
+	o.text = (danger and "☠ " or CAT_ICON[cat]) .. shown
 	ents[inst] = o
 	-- once alt parcalar izlendiyse (door frame vb.), sadece en dis kapiyi birak
 	for other in pairs(ents) do
@@ -809,8 +834,11 @@ local function trackEntity(inst, silent)
 	if cat == "entity" and not silent then
 		local myRoot = getRoot()
 		local dist = myRoot and math.floor((part.Position - myRoot.Position).Magnitude + 0.5) or 0
-		notify((danger and "☠ TEHLİKE: " or "⚠ ") .. inst.Name .. " spawn oldu (" .. dist .. " stud)", danger and "bad" or "entity")
-		addLog("entity", inst:GetFullName() .. " spawn oldu (" .. dist .. " stud)" .. (danger and "  [TEHLIKE]" or ""))
+		local prefix = (danger and "☠ TEHLİKE: " or "⚠ ") .. inst.Name .. " spawn oldu"
+		local entry = notify(prefix .. " (" .. dist .. " stud)", danger and "bad" or "entity", "ent:" .. inst.Name, prefix)
+		if entry.n == 1 then
+			addLog("entity", inst:GetFullName() .. " spawn oldu (" .. dist .. " stud)" .. (danger and "  [TEHLIKE]" or ""))
+		end
 		playAlert(danger)
 	end
 end
@@ -850,6 +878,7 @@ workspace.DescendantAdded:Connect(function(d)
 end)
 
 local MAX_DOOR_HL = 24 -- Roblox ayni anda ~31 highlight cizer; en yakin kapilara verilir
+local DEDUP = 8 -- ayni turden bu kadar yakin etiketlerden sadece biri gosterilir
 
 -- etiket sadece menzile girince olusturulur, cikinca silinir (uzaktakiler hic cizilmez)
 local function ensureBb(o)
@@ -858,7 +887,7 @@ local function ensureBb(o)
 		Adornee = o.part, Size = UDim2.fromOffset(180, 40), StudsOffset = Vector3.new(0, 3, 0), AlwaysOnTop = true,
 	}, gui)
 	new("TextLabel", {
-		Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, Text = o.text,
+		Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, Text = o.text, TextTruncate = Enum.TextTruncate.AtEnd,
 		TextColor3 = o.color, TextStrokeTransparency = 0, Font = Enum.Font.GothamBold, TextScaled = true, NoBind = true,
 	}, o.bb)
 	o.distLbl = new("TextLabel", {
@@ -869,13 +898,18 @@ end
 local function dropBb(o)
 	if o.bb then
 		o.bb:Destroy()
-		o.bb, o.distLbl, o.lastDist = nil, nil, nil
+		o.bb, o.distLbl, o.lastDist, o.f = nil, nil, nil, nil
 	end
+end
+
+local function limitFor(cat)
+	return cat == "entity" and S.entMax or cat == "door" and S.doorMax or S.objMax
 end
 
 local function updateEntities()
 	local myRoot = getRoot()
-	local doors = {}
+	-- 1) menzildekileri turlere ayir
+	local byCat = {}
 	for inst, o in pairs(ents) do
 		if not inst:IsDescendantOf(workspace) then
 			untrackEntity(inst)
@@ -884,35 +918,65 @@ local function updateEntities()
 				dropBb(o)
 				o.part = inst:IsA("BasePart") and inst or inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
 			end
-			local cat = o.cat
+			o.show = false
 			if o.part and myRoot then
 				local dist = (o.part.Position - myRoot.Position).Magnitude
 				o.dist = dist
-				local lim = cat == "entity" and S.entMax or cat == "door" and S.doorMax or S.objMax
-				local visible = dist <= lim
-				if visible then
-					ensureBb(o)
-					o.bb.Adornee = o.part
-					local d = math.floor(dist + 0.5)
-					if d ~= o.lastDist then
-						o.lastDist = d
-						o.distLbl.Text = d .. " stud"
-					end
-				else
-					dropBb(o)
+				if dist <= limitFor(o.cat) then
+					local l = byCat[o.cat]
+					if not l then l = {}; byCat[o.cat] = l end
+					l[#l + 1] = o
 				end
-				if cat == "entity" then
-					o.wantHl = visible and S.entHighlight
-				elseif cat == "door" then
-					o.wantHl = false
-					if visible and S.entDoorHl then table.insert(doors, o) end
-				else
-					o.wantHl = visible and S.entObjHl
-				end
-			else
-				o.wantHl = false
-				dropBb(o)
 			end
+		end
+	end
+	-- 2) ust uste binen etiketleri ele: en yakin olan kalir (varliklar haric)
+	for cat, list in pairs(byCat) do
+		table.sort(list, function(a, b) return a.dist < b.dist end)
+		local kept = {}
+		for _, o in ipairs(list) do
+			local pos = o.part.Position
+			local dup = false
+			if cat ~= "entity" then
+				for _, k in ipairs(kept) do
+					if (k - pos).Magnitude < DEDUP then dup = true; break end
+				end
+			end
+			if not dup then
+				kept[#kept + 1] = pos
+				o.show = true
+			end
+		end
+	end
+	-- 3) goster / gizle
+	local doors = {}
+	for inst, o in pairs(ents) do
+		local cat = o.cat
+		if o.show then
+			ensureBb(o)
+			o.bb.Adornee = o.part
+			-- uzaktaki yazilar kucuk, yaklastikca buyur
+			local f = 1.2 - 0.75 * math.min(o.dist / limitFor(cat), 1)
+			if not o.f or math.abs(f - o.f) > 0.03 then
+				o.f = f
+				o.bb.Size = UDim2.fromOffset(180 * f, 40 * f)
+			end
+			local d = math.floor(o.dist + 0.5)
+			if d ~= o.lastDist then
+				o.lastDist = d
+				o.distLbl.Text = d .. " stud"
+			end
+			if cat == "entity" then
+				o.wantHl = S.entHighlight
+			elseif cat == "door" then
+				o.wantHl = false
+				if S.entDoorHl then table.insert(doors, o) end
+			else
+				o.wantHl = S.entObjHl
+			end
+		else
+			dropBb(o)
+			o.wantHl = false
 		end
 	end
 	table.sort(doors, function(a, b) return a.dist < b.dist end)
@@ -1273,6 +1337,17 @@ addSlider(pPlayer, "Zıplama gücü", 0, 400, S.jump, function(v) S.jump = v end
 addToggle(pPlayer, "Sonsuz zıplama", false, function(v) S.infJump = v end, "infJump")
 addToggle(pPlayer, "Anti-Void (düşünce geri çek)", true, function(v) S.antiVoid = v end, "antiVoid")
 addToggle(pPlayer, "God mode (local can kilidi)", false, function(v) S.godMode = v end, "godMode")
+addToggle(pPlayer, "Otomatik can yenileme", false, function(v) S.autoHeal = v end, "autoHeal")
+addSlider(pPlayer, "Yenileme aralığı (sn)", 0.05, 2, S.healInterval, function(v) S.healInterval = v end, 0.05, "healInterval")
+task.spawn(function()
+	while true do
+		task.wait(S.healInterval)
+		if S.autoHeal then
+			local h = getHum()
+			if h and h.Health > 0 and h.Health < h.MaxHealth then h.Health = h.MaxHealth end
+		end
+	end
+end)
 addSection(pPlayer, "Yaratık koruması")
 addToggle(pPlayer, "Yaratık hasarını engelle (dokunma kapat)", false, function(v)
 	S.noEntDmg = v
@@ -1780,7 +1855,7 @@ addSection(pSet, "Ayarları kaydet")
 do
 	local FILE = "HunterPanel_settings.json"
 	local canFile = typeof(writefile) == "function" and typeof(readfile) == "function"
-	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true, autoCollect = true }
+	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true, autoCollect = true, entIgnore = true }
 
 	local function encode()
 		local data = { theme = X.themeIndex, v = {} }
@@ -1997,7 +2072,7 @@ RunService.RenderStepped:Connect(function(dt)
 	if S.espOn then updateESP() end
 	if S.entOn then
 		X.entT = (X.entT or 0) + dt
-		if X.entT >= 0.2 then -- saniyede 5 kez yeter
+		if X.entT >= 0.1 then -- saniyede 10 kez, boyut gecisi akici olsun
 			X.entT = 0
 			updateEntities()
 		end
