@@ -133,6 +133,7 @@ local S = {
 	fakeWords = "fake,decoy,false,sahte,mimic,illusion,dummy",
 	autoHeal = false, healInterval = 0.1,
 	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
+	lookGuard = false, hideLook = false, lookNames = "eyes,lookman", lookRange = 250,
 	dodge = false, dodgeTime = 1, dodgeMin = 12, dodgeFar = 600, dodgeStay = 1.2, dodgeBack = 35,
 	noEntDmg = true, flee = false, fleeDist = 25,
 	infStamina = false, fastPrompt = false, farPrompt = false, antiAfk = true,
@@ -159,6 +160,29 @@ end
 
 local X = { cur = 0, baseWalk = 16, speeding = false, themeIndex = DEFAULT_THEME,
 	clock0 = Lighting.ClockTime, fog0 = Lighting.FogEnd, zoom0 = player.CameraMaxZoomDistance, fps = 60 } -- ortak durum + sonradan baglanan fonksiyonlar
+-- tek DescendantAdded baglantisi + zaman butceli kuyruk: oda gecislerinde yuzlerce parca eklenirken takilma olmasin
+do
+	local handlers = {}
+	local q, qt, head, tail = {}, {}, 1, 0
+	function X.onAdded(fn) handlers[#handlers + 1] = fn end
+	workspace.DescendantAdded:Connect(function(d)
+		tail += 1
+		q[tail], qt[tail] = d, os.clock()
+	end)
+	RunService.Heartbeat:Connect(function()
+		local t0 = os.clock()
+		while head <= tail and os.clock() - t0 < 0.0015 do
+			if t0 - qt[head] < 0.2 then break end -- Humanoid vb. icerik gelsin diye 0.2 sn bekle
+			local d = q[head]
+			q[head], qt[head] = nil, nil
+			head += 1
+			if d.Parent then
+				for _, fn in ipairs(handlers) do pcall(fn, d) end
+			end
+		end
+		if head > tail then head, tail = 1, 0 end
+	end)
+end
 local lastDeathCF, pendingRevive, safePos
 local function teleportTo(cf)
 	local root = getRoot()
@@ -424,7 +448,7 @@ end
 
 local function createTab(name, icon, raw)
 	local b = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = T.panel, Text = "  " .. icon .. "  " .. name,
+		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = T.panel, Text = "  " .. icon .. "  " .. name,
 		TextColor3 = T.sub, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
 		AutoButtonColor = false, NoBind = true,
 	}, sidebar)
@@ -756,12 +780,31 @@ Players.PlayerRemoving:Connect(removeESP)
 -- SPAWN IZLEYICI + SESLI UYARI
 ------------------------------------------------------------------
 local ents = {}
+-- anahtar kelimeler ve sonuclar onbellekte: ayni isim tekrar tekrar sorulur (oda gecislerinde binlerce kez)
+local kwCache, hitCache = {}, {}
 local function listHas(listStr, name)
-	name = name:lower()
-	for kw in listStr:lower():gmatch("[^,%s]+") do
-		if name:find(kw, 1, true) then return true end
+	local kws = kwCache[listStr]
+	if not kws then
+		kws = {}
+		for kw in listStr:lower():gmatch("[^,%s]+") do kws[#kws + 1] = kw end
+		kwCache[listStr] = kws
 	end
-	return false
+	if #kws == 0 then return false end
+	local hc = hitCache[listStr]
+	if not hc then
+		hc = {}
+		hitCache[listStr] = hc
+	end
+	local r = hc[name]
+	if r == nil then
+		local l = name:lower()
+		r = false
+		for _, kw in ipairs(kws) do
+			if l:find(kw, 1, true) then r = true break end
+		end
+		if #name < 60 then hc[name] = r end
+	end
+	return r
 end
 local function entPos(inst)
 	if inst:IsA("Model") then return inst:GetPivot().Position end
@@ -777,6 +820,38 @@ local function untrackEntity(inst)
 end
 local function clearEntities() for i in pairs(ents) do untrackEntity(i) end end
 
+-- bilinen varlik adlari (model adi -> gosterilecek ad + uyari mesaji)
+local ENT_DB = {}
+do
+	local function e(model, alias, body) ENT_DB[model] = { alias = alias, title = "Entity '" .. alias .. "' has spawned.", body = body } end
+	e("TV_Stand", "Noise_TV", "Dont get near it")
+	e("Portrait", "Portrait", "Use him to duplicate items.")
+	e("StemsEntity", "Balls", "Balls.")
+	e("NoiseModel", "Noise", "Dont let it touch you.")
+	e("Creak", "Creak", "Dont touch him.")
+	e("DronesStampede", "Drones Stampede", "Find a hiding spot.")
+	e("TellerRig", "Teller", "Dont worry, hes only annoying.")
+	e("Scribbles", "Scribbles", "Find a hiding spot.")
+	e("BashMoving", "Bash", "Find a hiding spot.")
+	e("RushMoving", "Rush", "Find a hiding spot.")
+	e("AmbushMoving", "Ambush", "Find a hiding spot.")
+	e("Eyes", "Eyes", "Avoid looking at it.")
+	e("Lookman", "Eyes", "Avoid looking at it.")
+	e("BackdoorRush", "Blitz", "Find a hiding spot.")
+	e("BackdoorLookman", "Lookman", "Avoid looking at its eyes.")
+	e("Groundskeeper", "Groundskeeper", "Avoid stepping on the grass.")
+	e("A60", "A-60", "Find a hiding spot.")
+	e("A120", "A-120", "Find a hiding spot.")
+	e("GloombatSwarm", "Gloombat Swarm", "Keep all light sources turned off.")
+	e("GlitchRush", "RNIUSHCG==", "Find a hiding spot.")
+	e("GlitchAmbush", "AR0xMBUSH", "Find a hiding spot.")
+	e("MonumentEntity", "Monument", "It can't move while you are looking at it.")
+	e("JeffTheKiller", "Jeff the Killer", "Avoid touching him.")
+	e("CustomEntity", "Custom Entity", "Find a hiding spot.")
+	e("FrozenAmbush", "Frozen Ambush", "Find a hiding spot.")
+	e("SallyMoving", "Sally", "Find her horse and rop it.")
+end
+
 -- her zaman yok sayilan isimler (kayitli ayarlar bunu ezemez)
 local BUILTIN_IGNORE = "frame,knob,hinge,doorway,jamb,trim,handle,hitbox,hurtbox,terrain,camera,baseplate,spawnlocation,"
 	.. "wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window,panel,cube,mesh,decal,glow,sign,start_,end_"
@@ -788,6 +863,7 @@ end
 local function classify(inst)
 	if inst:IsA("Terrain") then return nil end
 	local name = inst.Name
+	if ENT_DB[name] and (inst:IsA("Model") or inst:IsA("BasePart")) then return "entity", true end
 	if not inst:IsA("Model") then
 		-- yerdeki Tool'lar ve tek parca kapi / esyalar
 		if inst:IsA("Tool") then
@@ -849,7 +925,8 @@ local function trackEntity(inst, silent)
 	local fake = cat == "door" and isFakeDoor(inst)
 	if fake then color = T.bad end
 	local o = { part = part, cat = cat, color = color, fake = fake }
-	local shown = cat == "door" and (fake and "Sahte kapı" or "Kapı") or inst.Name
+	local db = ENT_DB[inst.Name]
+	local shown = cat == "door" and (fake and "Sahte kapı" or "Kapı") or (db and db.alias) or inst.Name
 	if #shown > 18 then shown = shown:sub(1, 16) .. "…" end
 	o.text = (danger and "☠ " or CAT_ICON[cat]) .. shown
 	ents[inst] = o
@@ -862,7 +939,12 @@ local function trackEntity(inst, silent)
 		local myRoot = getRoot()
 		local dist = myRoot and math.floor((part.Position - myRoot.Position).Magnitude + 0.5) or 0
 		local prefix = (danger and "☠ TEHLİKE: " or "⚠ ") .. inst.Name .. " spawn oldu"
-		local entry = notify(prefix .. " (" .. dist .. " stud)", danger and "bad" or "entity", "ent:" .. inst.Name, prefix)
+		local full = prefix .. " (" .. dist .. " stud)"
+		if db then
+			prefix = "☠ " .. db.title
+			full = prefix .. " " .. db.body .. " (" .. dist .. " stud)"
+		end
+		local entry = notify(full, danger and "bad" or "entity", "ent:" .. inst.Name, prefix)
 		if entry.n == 1 then
 			addLog("entity", inst:GetFullName() .. " spawn oldu (" .. dist .. " stud)" .. (danger and "  [TEHLIKE]" or ""))
 		end
@@ -892,16 +974,13 @@ function X.refreshEnt()
 end
 X.refreshEnt()
 
-workspace.DescendantAdded:Connect(function(d)
+X.onAdded(function(d)
 	if not S.entOn then return end
 	local ok = d:IsA("Model") or d:IsA("Tool") or (d:IsA("BasePart")
 		and ((S.entDoor and listHas(S.entDoors, d.Name)) or (S.entItem and listHas(S.entItems, d.Name))
 		or (S.entChest and listHas(S.entChests, d.Name))))
 	if not ok then return end
-	local silent = os.clock() - startTime < 4
-	task.delay(0.2, function()
-		if d.Parent then trackEntity(d, silent) end
-	end)
+	trackEntity(d, os.clock() - startTime < 4)
 end)
 
 local MAX_SHOW = 600 -- bundan uzaktaki hicbir sey gosterilmez / islenmez
@@ -1050,7 +1129,7 @@ local function updateHbViz()
 		if root then addHbViz(root, plr == player and T.ok or nil) end
 	end
 end
-workspace.DescendantAdded:Connect(function(d)
+X.onAdded(function(d)
 	if S.hbViz and hbTarget(d) then addHbViz(d) end
 end)
 
@@ -1106,7 +1185,7 @@ do
 			end
 		end)
 	end
-	workspace.DescendantAdded:Connect(function(d)
+	X.onAdded(function(d)
 		if S.noTouch and isKill(d) then disableKill(d) end
 	end)
 
@@ -1140,6 +1219,66 @@ do
 			X.dodging = false
 		end)
 	end
+
+	-- "BAKINCA HASAR VEREN" yaratiklar (Eyes vb.): kamerayi yere cevir / yerelde gizle
+	local lookOrig, lastLookNote = {}, 0
+	local function isLook(inst) return listHas(S.lookNames, inst.Name) end
+	local function hideObj(p)
+		if lookOrig[p] then return end
+		if p:IsA("BasePart") then
+			lookOrig[p] = { p.Transparency, p.CanQuery }
+			p.Transparency = 1
+			p.CanQuery = false
+		elseif p:IsA("Decal") or p:IsA("Texture") then
+			lookOrig[p] = { p.Transparency }
+			p.Transparency = 1
+		elseif p:IsA("Light") or p:IsA("ParticleEmitter") then
+			lookOrig[p] = { p.Enabled }
+			p.Enabled = false
+		end
+	end
+	function X.restoreLook()
+		for p, v in pairs(lookOrig) do
+			if p.Parent then
+				if p:IsA("BasePart") then
+					p.Transparency, p.CanQuery = v[1], v[2]
+				elseif p:IsA("Decal") or p:IsA("Texture") then
+					p.Transparency = v[1]
+				else
+					p.Enabled = v[1]
+				end
+			end
+		end
+		table.clear(lookOrig)
+	end
+	function X.hideLookers()
+		for inst, o in pairs(ents) do
+			if o.cat == "entity" and isLook(inst) and inst:IsDescendantOf(workspace) then
+				hideObj(inst)
+				for _, d in ipairs(inst:GetDescendants()) do hideObj(d) end
+			end
+		end
+	end
+	RunService:BindToRenderStep("HunterLookGuard", Enum.RenderPriority.Camera.Value + 1, function()
+		if not S.lookGuard then return end
+		local cam = workspace.CurrentCamera
+		if not cam then return end
+		for inst, o in pairs(ents) do
+			if o.cat == "entity" and o.part and isLook(inst) and o.part:IsDescendantOf(workspace) then
+				local pos = inst:IsA("Model") and inst:GetPivot().Position or o.part.Position
+				local v, on = cam:WorldToViewportPoint(pos)
+				if on and v.Z > 0 and v.Z < S.lookRange then
+					local _, yaw = cam.CFrame:ToEulerAnglesYXZ()
+					cam.CFrame = CFrame.new(cam.CFrame.Position) * CFrame.Angles(0, yaw, 0) * CFrame.Angles(-math.rad(80), 0, 0)
+					if os.clock() - lastLookNote > 3 then
+						lastLookNote = os.clock()
+						notify("'" .. inst.Name .. "' ekranda: kamera yere çevrildi", "warn")
+					end
+					break
+				end
+			end
+		end
+	end)
 
 	function X.restoreEntDmg()
 		for p in pairs(dmgOrig) do
@@ -1191,7 +1330,9 @@ do
 		-- yaratik hasari: yaratigin parcalarinin dokunmasini kapat
 		if S.noEntDmg then
 			for inst, o in pairs(ents) do
-				if o.cat == "entity" and (o.dist or 1e9) < 250 and inst:IsDescendantOf(workspace) then
+				if o.cat == "entity" and (o.dist or 1e9) < 250 and os.clock() - (o.dmgT or 0) > 1.5
+					and inst:IsDescendantOf(workspace) then
+					o.dmgT = os.clock()
 					for _, p in ipairs(inst:GetDescendants()) do
 						if p:IsA("BasePart") and p.CanTouch then
 							dmgOrig[p] = true
@@ -1234,6 +1375,11 @@ do
 					break
 				end
 			end
+		end
+
+		if S.hideLook and os.clock() - (X.lookT or 0) > 1 then
+			X.lookT = os.clock()
+			X.hideLookers()
 		end
 
 		-- yaratik yaklasma hizindan "1 sn sonra dokunur" tahmini
@@ -1368,7 +1514,7 @@ do
 			end
 		end)
 	end
-	workspace.DescendantAdded:Connect(function(d)
+	X.onAdded(function(d)
 		if (S.fastPrompt or S.farPrompt) and d:IsA("ProximityPrompt") then applyPrompt(d) end
 	end)
 
@@ -1395,6 +1541,7 @@ local pPlayer = createTab("Oyuncu", "👤")
 local pMove = createTab("Hareket", "🏃")
 local pTp = createTab("Işınlan", "📍")
 local pItem = createTab("Eşya", "🎒")
+local pExp = createTab("Explorer", "🗂", true)
 local pDoor = createTab("Kapılar", "🚪")
 local pDepo = createTab("Depo", "📦")
 local pLog = createTab("Sunucu", "📡", true)
@@ -1467,6 +1614,13 @@ addToggle(pPlayer, "Yaratık hasarını engelle (dokunma kapat)", true, function
 end, "noEntDmg")
 addToggle(pPlayer, "Yaratık yaklaşınca güvenli noktaya kaç", false, function(v) S.flee = v end, "flee")
 addSlider(pPlayer, "Kaçış mesafesi (stud)", 5, 100, S.fleeDist, function(v) S.fleeDist = v end, 1, "fleeDist")
+addToggle(pPlayer, "Bakınca hasar veren yaratık: kamerayı yere çevir", false, function(v) S.lookGuard = v end, "lookGuard")
+addToggle(pPlayer, "Bakınca hasar veren yaratık: yerelde gizle", false, function(v)
+	S.hideLook = v
+	if not v then X.restoreLook() end
+end, "hideLook")
+addTextBox(pPlayer, "Bakılmayacak:", S.lookNames, function(t) S.lookNames = t end, "lookNames")
+addSlider(pPlayer, "Bakma koruması menzili (stud)", 20, 600, S.lookRange, function(v) S.lookRange = v end, 10, "lookRange")
 addToggle(pPlayer, "Yaratık dokunmadan ~1 sn önce uzağa fırlat, sonra geri koy", false, function(v) S.dodge = v end, "dodge")
 addSlider(pPlayer, "Tahmin süresi (sn)", 0.3, 3, S.dodgeTime, function(v) S.dodgeTime = v end, 0.1, "dodgeTime")
 addSlider(pPlayer, "Her zaman tetik mesafesi (stud)", 5, 60, S.dodgeMin, function(v) S.dodgeMin = v end, 1, "dodgeMin")
@@ -1604,6 +1758,573 @@ do
 		}, rw)
 		miniBtn(rw, "Git", -118, function() teleportTo(cf) end)
 		miniBtn(rw, "Sil", -60, function() rw:Destroy() end)
+	end)
+end
+
+-- EXPLORER: oyunun dosya agacini gez, incele, ozellik oku (hepsi yerel)
+do
+	local SERVICES = { "Workspace", "ReplicatedStorage", "Lighting", "StarterGui", "StarterPack", "Players", "ReplicatedFirst", "SoundService", "Teams", "game" }
+	local rootIdx, selected, searchResults, searching = 1, nil, nil, false
+	local expanded, rowMap, hlMap, hideOrig, colOrig = {}, {}, {}, {}, {}
+
+	local function svc(name)
+		if name == "game" then return game end
+		local ok, s = pcall(game.GetService, game, name)
+		return ok and s or nil
+	end
+	local function esc(s)
+		s = s:gsub("&", "&amp;")
+		s = s:gsub("<", "&lt;")
+		s = s:gsub(">", "&gt;")
+		return s
+	end
+	local function posOf(inst)
+		if inst:IsA("BasePart") then return inst.Position end
+		if inst:IsA("Model") then return inst:GetPivot().Position end
+		if inst:IsA("Attachment") then return inst.WorldPosition end
+		local p = inst:FindFirstChildWhichIsA("BasePart", true)
+		return p and p.Position
+	end
+	local function partsOf(inst)
+		local list = {}
+		if inst:IsA("BasePart") then list[1] = inst end
+		for _, d in ipairs(inst:GetDescendants()) do
+			if d:IsA("BasePart") then list[#list + 1] = d end
+		end
+		return list
+	end
+	local function fv(v)
+		local t = typeof(v)
+		if t == "Vector3" then return string.format("%.1f, %.1f, %.1f", v.X, v.Y, v.Z) end
+		if t == "number" then return string.format("%.4g", v) end
+		if t == "Instance" then return v:GetFullName() end
+		return tostring(v)
+	end
+
+	local function describe(inst)
+		local L = {
+			"Ad: " .. inst.Name, "Sınıf: " .. inst.ClassName, "Yol: " .. inst:GetFullName(), "Çocuk: " .. #inst:GetChildren(),
+		}
+		local function add(name)
+			local ok, v = pcall(function() return inst[name] end)
+			if ok and v ~= nil then L[#L + 1] = name .. ": " .. fv(v) end
+		end
+		local function addAll(names) for _, n in ipairs(names) do add(n) end end
+		if inst:IsA("BasePart") then
+			addAll({ "Position", "Size", "Anchored", "CanCollide", "CanTouch", "Transparency", "Material" })
+		elseif inst:IsA("Model") then
+			L[#L + 1] = "Konum: " .. fv(inst:GetPivot().Position)
+			add("PrimaryPart")
+		elseif inst:IsA("Humanoid") then
+			addAll({ "Health", "MaxHealth", "WalkSpeed", "JumpPower" })
+		elseif inst:IsA("ValueBase") then
+			add("Value")
+		elseif inst:IsA("ProximityPrompt") then
+			addAll({ "ActionText", "ObjectText", "HoldDuration", "MaxActivationDistance", "Enabled" })
+		elseif inst:IsA("ClickDetector") then
+			add("MaxActivationDistance")
+		elseif inst:IsA("Sound") then
+			addAll({ "SoundId", "Volume", "Playing" })
+		elseif inst:IsA("GuiObject") then
+			addAll({ "Visible", "Text" })
+		elseif inst:IsA("Tool") then
+			addAll({ "CanBeDropped", "RequiresHandle" })
+		end
+		for k, v in pairs(inst:GetAttributes()) do L[#L + 1] = "@" .. k .. ": " .. fv(v) end
+		return table.concat(L, "\n")
+	end
+
+	------------------------------------------------------------------ arayuz
+	local rootBtn = new("TextButton", {
+		Size = UDim2.fromOffset(150, 30), BackgroundColor3 = T.card, TextColor3 = T.text, Font = Enum.Font.GothamMedium,
+		TextSize = 12, AutoButtonColor = false, Text = "",
+	}, pExp)
+	round(rootBtn, 6)
+	local searchBox = new("TextBox", {
+		Size = UDim2.new(1, -234, 0, 30), Position = UDim2.fromOffset(156, 0), BackgroundColor3 = T.card, TextColor3 = T.text,
+		PlaceholderText = "isim ara (Enter)", PlaceholderColor3 = T.sub, Text = "", Font = Enum.Font.Code, TextSize = 12,
+		ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left,
+	}, pExp)
+	round(searchBox, 6)
+	new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, searchBox)
+	local refreshBtn = new("TextButton", {
+		Size = UDim2.fromOffset(72, 30), Position = UDim2.new(1, -72, 0, 0), BackgroundColor3 = T.accent, TextColor3 = Color3.new(1, 1, 1),
+		Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = false, Text = "🔄 Yenile",
+	}, pExp)
+	round(refreshBtn, 6)
+
+	local tree = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 0, 170), Position = UDim2.fromOffset(0, 36), BackgroundColor3 = T.bg, BorderSizePixel = 0,
+		ScrollBarThickness = 4, ScrollBarImageColor3 = T.stroke, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+	}, pExp)
+	round(tree, 8)
+	stroke(tree)
+	new("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, tree)
+
+	local infoBox = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 0, 84), Position = UDim2.fromOffset(0, 212), BackgroundColor3 = T.card, BorderSizePixel = 0,
+		ScrollBarThickness = 3, ScrollBarImageColor3 = T.stroke, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+	}, pExp)
+	round(infoBox, 8)
+	local infoLbl = new("TextLabel", {
+		Size = UDim2.new(1, -12, 0, 0), Position = UDim2.fromOffset(8, 4), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+		TextWrapped = true, TextColor3 = T.text, Font = Enum.Font.Code, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top, Text = "Bir öğe seç.",
+	}, infoBox)
+
+	local btnGrid = new("Frame", { Size = UDim2.new(1, 0, 1, -302), Position = UDim2.fromOffset(0, 302), BackgroundTransparency = 1 }, pExp)
+	new("UIGridLayout", { CellSize = UDim2.new(0.25, -4, 0, 32), CellPadding = UDim2.fromOffset(4, 4) }, btnGrid)
+
+	------------------------------------------------------------------ agac
+	local rebuild
+	local function select(inst)
+		local prev = selected
+		selected = inst
+		if prev and rowMap[prev] then rowMap[prev].BackgroundTransparency = 1 end
+		if inst and rowMap[inst] then rowMap[inst].BackgroundTransparency = 0.5 end
+		infoLbl.Text = inst and describe(inst) or "Bir öğe seç."
+	end
+
+	local function flatten(inst, depth, out)
+		local kids = inst:GetChildren()
+		table.sort(kids, function(a, b) return a.Name:lower() < b.Name:lower() end)
+		for i, c in ipairs(kids) do
+			if #out > 400 then return end
+			if i > 150 then
+				out[#out + 1] = { more = #kids - 150, depth = depth }
+				break
+			end
+			out[#out + 1] = { inst = c, depth = depth }
+			if expanded[c] then flatten(c, depth + 1, out) end
+		end
+	end
+
+	function rebuild()
+		for _, c in ipairs(tree:GetChildren()) do
+			if c:IsA("GuiObject") then c:Destroy() end
+		end
+		table.clear(rowMap)
+		local out = {}
+		if searchResults then
+			for _, inst in ipairs(searchResults) do out[#out + 1] = { inst = inst, depth = 0, path = true } end
+		else
+			local r = svc(SERVICES[rootIdx])
+			if r then flatten(r, 0, out) end
+		end
+		rootBtn.Text = searchResults and ("Arama: " .. #searchResults) or ("Kök: " .. SERVICES[rootIdx] .. " ▾")
+		for i, e in ipairs(out) do
+			local b = new("TextButton", {
+				Size = UDim2.new(1, -6, 0, 20), BackgroundColor3 = T.accent, BackgroundTransparency = 1, Text = "",
+				AutoButtonColor = false, BorderSizePixel = 0, LayoutOrder = i,
+			}, tree)
+			local indent = e.depth * 14
+			if e.more then
+				new("TextLabel", {
+					Size = UDim2.new(1, -indent - 20, 1, 0), Position = UDim2.fromOffset(indent + 20, 0), BackgroundTransparency = 1,
+					Text = "… " .. e.more .. " öğe daha", TextColor3 = T.sub, Font = Enum.Font.Gotham, TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left,
+				}, b)
+			else
+				local inst = e.inst
+				rowMap[inst] = b
+				if inst == selected then b.BackgroundTransparency = 0.5 end
+				local hasKids = #inst:GetChildren() > 0
+				if hasKids and not e.path then
+					local arrow = new("TextButton", {
+						Size = UDim2.fromOffset(18, 20), Position = UDim2.fromOffset(indent, 0), BackgroundTransparency = 1,
+						Text = expanded[inst] and "▾" or "▸", TextColor3 = T.sub, Font = Enum.Font.GothamBold, TextSize = 12,
+					}, b)
+					arrow.MouseButton1Click:Connect(function()
+						expanded[inst] = not expanded[inst] or nil
+						rebuild()
+					end)
+				end
+				local label = esc(inst.Name) .. "  <font color='#" .. T.sub:ToHex() .. "' size='10'>"
+					.. inst.ClassName .. (e.path and ("  " .. esc(inst:GetFullName())) or "") .. "</font>"
+				new("TextLabel", {
+					Size = UDim2.new(1, -indent - 20, 1, 0), Position = UDim2.fromOffset(indent + 20, 0), BackgroundTransparency = 1,
+					RichText = true, Text = label, TextColor3 = T.text, Font = Enum.Font.Gotham, TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+				}, b)
+				b.MouseButton1Click:Connect(function() select(inst) end)
+			end
+		end
+	end
+
+	rootBtn.MouseButton1Click:Connect(function()
+		rootIdx = rootIdx % #SERVICES + 1
+		searchResults = nil
+		rebuild()
+	end)
+	refreshBtn.MouseButton1Click:Connect(function()
+		rebuild()
+		if selected and selected.Parent then select(selected) end
+	end)
+	searchBox.FocusLost:Connect(function()
+		local q = searchBox.Text:lower()
+		if q == "" then
+			searchResults = nil
+			rebuild()
+			return
+		end
+		if searching then return end
+		searching = true
+		task.spawn(function()
+			local res, n = {}, 0
+			local r = svc(SERVICES[rootIdx])
+			if r then
+				for _, d in ipairs(r:GetDescendants()) do
+					if d.Name:lower():find(q, 1, true) then
+						res[#res + 1] = d
+						if #res >= 200 then break end
+					end
+					n += 1
+					if n % 3000 == 0 then task.wait() end
+				end
+			end
+			searchResults = res
+			searching = false
+			rebuild()
+		end)
+	end)
+
+	------------------------------------------------------------------ eylemler
+	local function actBtn(text, cb)
+		local b = new("TextButton", {
+			BackgroundColor3 = T.card, Text = text, TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 11, AutoButtonColor = false,
+		}, btnGrid)
+		round(b, 6)
+		stroke(b)
+		b.MouseButton1Click:Connect(function()
+			if not selected or not selected.Parent then notify("Önce bir öğe seç", "warn") return end
+			cb(selected)
+		end)
+	end
+
+	actBtn("📍 Git", function(inst)
+		local p = posOf(inst)
+		if p then teleportTo(CFrame.new(p + Vector3.new(0, 4, 0))) else notify("Konumu yok", "warn") end
+	end)
+	actBtn("✨ Parlat", function(inst)
+		if hlMap[inst] then
+			hlMap[inst]:Destroy()
+			hlMap[inst] = nil
+		elseif inst:IsA("PVInstance") then
+			hlMap[inst] = new("Highlight", {
+				Adornee = inst, FillColor = T.accent, OutlineColor = Color3.new(1, 1, 1), FillTransparency = 0.5,
+				DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, NoBind = true,
+			}, gui)
+		else
+			notify("Bu tür parlatılamaz (Model / Part olmalı)", "warn")
+		end
+	end)
+	actBtn("👁 Gizle/Göster", function(inst)
+		local parts = partsOf(inst)
+		if #parts == 0 then notify("Part yok", "warn") return end
+		local hidden = hideOrig[inst]
+		if hidden then
+			for p, t in pairs(hidden) do
+				if p.Parent then p.Transparency = t end
+			end
+			hideOrig[inst] = nil
+		else
+			local map = {}
+			for _, p in ipairs(parts) do
+				map[p] = p.Transparency
+				p.Transparency = 1
+			end
+			hideOrig[inst] = map
+		end
+	end)
+	actBtn("🚧 Çarpışma", function(inst)
+		local parts = partsOf(inst)
+		if #parts == 0 then notify("Part yok", "warn") return end
+		local orig = colOrig[inst]
+		if orig then
+			for p, c in pairs(orig) do
+				if p.Parent then p.CanCollide = c end
+			end
+			colOrig[inst] = nil
+		else
+			local map = {}
+			for _, p in ipairs(parts) do
+				map[p] = p.CanCollide
+				p.CanCollide = false
+			end
+			colOrig[inst] = map
+		end
+	end)
+	actBtn("📋 Yolu kopyala", function(inst)
+		local path = inst:GetFullName()
+		if typeof(setclipboard) == "function" then
+			setclipboard(path)
+			notify("Yol kopyalandı", "ok")
+		else
+			searchBox.Text = path
+			notify("setclipboard yok: yol arama kutusuna yazıldı, oradan kopyala", "info")
+		end
+	end)
+	actBtn("🗑 Yerelde sil", function(inst)
+		local char = player.Character
+		if inst.Parent == game or inst == char or (char and inst:IsAncestorOf(char)) or inst:IsAncestorOf(gui)
+			or inst == workspace.CurrentCamera or inst:IsDescendantOf(player) then
+			notify("Bu öğe silinemez (servis / karakter / panel)", "bad")
+			return
+		end
+		inst:Destroy()
+		select(nil)
+		rebuild()
+		notify("Yerelde silindi (sunucuda durur)", "ok")
+	end)
+	actBtn("🎒 Çantaya ver", function(inst)
+		if not inst:IsA("Tool") then notify("Sadece Tool verilebilir", "warn") return end
+		local bp = player:FindFirstChildOfClass("Backpack")
+		if bp then
+			inst:Clone().Parent = bp
+			notify(inst.Name .. " çantana eklendi (yerel)", "ok")
+		end
+	end)
+	actBtn("⚡ Tetikle", function(inst)
+		if inst:IsA("ProximityPrompt") then
+			pcall(function()
+				if typeof(fireproximityprompt) == "function" then
+					fireproximityprompt(inst)
+				else
+					inst:InputHoldBegin()
+					task.wait(inst.HoldDuration + 0.1)
+					inst:InputHoldEnd()
+				end
+			end)
+		elseif inst:IsA("ClickDetector") and typeof(fireclickdetector) == "function" then
+			pcall(fireclickdetector, inst)
+		else
+			notify("ProximityPrompt veya ClickDetector seç", "warn")
+		end
+	end)
+
+	rebuild()
+end
+
+-- BYPASS: bilinen oyun nesnelerinin dokunmasini / carpismasini kapat (hepsi yerel)
+do
+	local function eachPart(obj, fn)
+		if obj:IsA("BasePart") then fn(obj) end
+		for _, d in ipairs(obj:GetDescendants()) do
+			if d:IsA("BasePart") then fn(d) end
+		end
+	end
+	local function touch(o, on) eachPart(o, function(p) p.CanTouch = not on end) end
+
+	local ORDER = {
+		"bpGiggle", "bpDupe", "bpGloom", "bpSeekObs", "bpVacuum", "bpLava", "bpScary", "bpSnare", "bpBanana", "bpJeff",
+		"bpWater", "bpAlma", "bpDrones", "bpScribbles",
+	}
+	local DEFS = {
+		bpGiggle = { text = "Bypass Giggle (GiggleCeiling)", names = { "GiggleCeiling" }, apply = function(o, on)
+			local h = o:FindFirstChild("Hitbox")
+			if h then h.CanTouch = not on end
+		end },
+		bpDupe = { text = "Bypass Dupe (sahte kapılar)", names = { "DoorFake", "FakeDoor" }, apply = function(o, on)
+			local h = o:FindFirstChild("Hidden")
+			if h then h.CanTouch = not on end
+			local lock = o:FindFirstChild("Lock")
+			local up = lock and lock:FindFirstChild("UnlockPrompt")
+			if up then up.Enabled = not on end
+		end },
+		bpGloom = { text = "Bypass Gloombat yumurtaları", names = { "GloombatEgg", "GloomEgg" }, apply = touch },
+		bpSeekObs = { text = "Bypass Seek engelleri", names = { "SeekFloodline", "Seek_Arm", "Seek_Hand", "ChandelierObstruction", "SeekObstruction" },
+			apply = function(o, on)
+				touch(o, on)
+				if o.Name == "SeekFloodline" then eachPart(o, function(p) p.CanCollide = on end) end
+			end },
+		bpVacuum = { text = "Bypass Vacuum (SideroomSpace)", names = { "SideroomSpace" }, apply = function(o, on)
+			local c = o:FindFirstChild("Collision")
+			if c then
+				c.CanCollide = on
+				c.CanTouch = not on
+			end
+		end },
+		bpLava = { text = "Bypass Killbricks (Lava)", names = { "Lava" }, apply = touch },
+		bpScary = { text = "Bypass Seeking Wall (ScaryWall)", names = { "ScaryWall" }, apply = function(o, on)
+			eachPart(o, function(p)
+				p.CanTouch = not on
+				p.CanCollide = not on
+			end)
+		end },
+		bpSnare = { text = "Bypass Snare", names = { "Snare" }, apply = touch },
+		bpBanana = { text = "Bypass Banana Peel", names = { "BananaPeel" }, apply = touch },
+		bpJeff = { text = "Bypass Jeff the Killer", names = { "JeffTheKiller" }, apply = function(o, on)
+			eachPart(o, function(p)
+				p.CanCollide = not on
+				p.CanTouch = not on
+			end)
+			local h = o:FindFirstChildOfClass("Humanoid")
+			if on and h then h.Health = 0 end
+		end },
+	}
+	-- Archives
+	DEFS.bpWater = { text = "Bypass Electric Water", names = { "ElectricWater", "Electric_Water" }, apply = touch }
+	DEFS.bpAlma = { text = "Bypass Alma (doğmasını engelle)", names = { "Alma", "AlmaMoving" }, apply = function(o, on)
+		if on then o:Destroy() end
+	end }
+	DEFS.bpDrones = { text = "Bypass Drones", names = { "DronesStampede", "Drones", "Drone" }, apply = touch }
+	DEFS.bpScribbles = { text = "Bypass Scribbles", names = { "Scribbles" }, apply = touch }
+
+	-- Remove: doğmasını engelle (model oluşunca yerelde silinir)
+	local function removeDef(text, names)
+		return { text = text, names = names, apply = function(o, on) if on then o:Destroy() end end }
+	end
+	DEFS.rmScreech = removeDef("Remove Screech", { "Screech" })
+	DEFS.rmHalt = removeDef("Remove Halt", { "Halt", "Shade" })
+	DEFS.rmA90 = removeDef("Remove A-90", { "A90", "A-90" })
+	DEFS.rmDread = removeDef("Remove Dread", { "Dread" })
+	DEFS.rmSurge = removeDef("Remove Surge", { "Surge" })
+	for _, k in ipairs({ "rmScreech", "rmHalt", "rmA90", "rmDread", "rmSurge" }) do table.insert(ORDER, k) end
+
+	local byName = {}
+	for key, def in pairs(DEFS) do
+		for _, n in ipairs(def.names) do
+			byName[n] = byName[n] or {}
+			table.insert(byName[n], key)
+		end
+	end
+
+	local function rescan(key)
+		local def = DEFS[key]
+		local lookup = {}
+		for _, n in ipairs(def.names) do lookup[n] = true end
+		task.spawn(function()
+			local n = 0
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if lookup[d.Name] then pcall(def.apply, d, S[key] and true or false) end
+				n += 1
+				if n % 2000 == 0 then task.wait() end
+			end
+		end)
+	end
+	X.onAdded(function(d)
+		local keys = byName[d.Name]
+		if keys then
+			for _, k in ipairs(keys) do
+				if S[k] then pcall(DEFS[k].apply, d, true) end
+			end
+		end
+	end)
+
+	addSection(pPlayer, "Bypass (tuzak / yaratık)")
+	for _, key in ipairs(ORDER) do
+		addToggle(pPlayer, DEFS[key].text, false, function(v)
+			S[key] = v
+			rescan(key)
+		end, key)
+	end
+
+	-- No ... Damage: gercek remote'u klasorden cikarip yerine ayni adli sahte remote koy (sunucuya hic ulasmaz)
+	local stash = {}
+	local function remotesFolder()
+		return ReplicatedStorage:FindFirstChild("RemotesFolder") or ReplicatedStorage:FindFirstChild("Remotes")
+	end
+	local function swapRemote(name, on)
+		local rf = remotesFolder()
+		if not rf then notify("RemotesFolder bulunamadı", "warn") return end
+		local rec = stash[name]
+		if on then
+			if rec then return end
+			local real = rf:FindFirstChild(name)
+			if not real then notify("'" .. name .. "' remote'u bulunamadı", "warn") return end
+			local fake = Instance.new(real.ClassName)
+			fake.Name = real.Name
+			stash[name] = { real = real, fake = fake }
+			real.Parent = nil
+			fake.Parent = rf
+		elseif rec then
+			rec.fake:Destroy()
+			rec.real.Parent = rf
+			stash[name] = nil
+		end
+	end
+	for _, d in ipairs({
+		{ "noScreechDmg", "No Screech Damage", "Screech" },
+		{ "noHaltDmg", "No Halt Damage", "Shade" },
+		{ "noA90Dmg", "No A-90 Damage", "A90" },
+		{ "noSurgeDmg", "No Surge Damage", "SurgeRemote" },
+	}) do
+		addToggle(pPlayer, d[2], false, function(v)
+			S[d[1]] = v
+			swapRemote(d[3], v)
+		end, d[1])
+	end
+
+	-- workspace'e dogrudan eklenen cop / fidye nesnelerini sil
+	addToggle(pPlayer, "Anti Closet Trash (Binder / Shoe / Shelf sil)", false, function(v) S.antiTrash = v end, "antiTrash")
+	addToggle(pPlayer, "Anti Ransom (Ransom sil)", false, function(v) S.antiRansom = v end, "antiRansom")
+	X.onAdded(function(d)
+		if d.Parent ~= workspace then return end
+		local n = d.Name
+		if S.antiTrash and (n:sub(1, 6) == "Binder" or n:sub(1, 4) == "Shoe" or n:sub(1, 5) == "Shelf") then
+			d:Destroy()
+		elseif S.antiRansom and n == "Ransom" then
+			d:Destroy()
+		end
+	end)
+
+	-- ForgetMeNot: yapistirdigin kodun sadece gorunen kismi (FireLookAts). Sonrasi kesik oldugu icin oda gecisi / void kismi yok.
+	local fmnDone = setmetatable({}, { __mode = "k" })
+	addToggle(pPlayer, "ForgetMeNot solver (LookAt gönder)", false, function(v)
+		S.fmn = v
+		if v then table.clear(fmnDone) end
+	end, "fmn")
+	task.spawn(function()
+		while true do
+			task.wait(0.5)
+			local rooms = S.fmn and workspace:FindFirstChild("CurrentRooms")
+			if rooms then
+				for _, room in ipairs(rooms:GetChildren()) do
+					if not fmnDone[room] and room:FindFirstChild("ForgetMeNotVineDoors", true) then
+						fmnDone[room] = true
+						for i = 1, 6 do
+							local obj = room:FindFirstChild(tostring(i))
+							local la = obj and obj:FindFirstChild("LookAt")
+							if la and la:IsA("RemoteEvent") then pcall(function() la:FireServer() end) end
+						end
+						notify("ForgetMeNot: LookAt gönderildi (oda " .. room.Name .. ")", "ok")
+					end
+				end
+			end
+		end
+	end)
+
+	-- Eyes / Lookman: oyunun MotorReplication remote'una sahte bakis acisi gonder
+	addToggle(pPlayer, "Bypass Eyes (remote)", false, function(v) S.bpEyes = v end, "bpEyes")
+	addToggle(pPlayer, "Bypass Lookman (remote)", false, function(v) S.bpLookman = v end, "bpLookman")
+	addToggle(pPlayer, "Eyes/Lookman: eski kat varyantı (Fools / OldHotel)", false, function(v) S.bpOldFloor = v end, "bpOldFloor")
+	local function motorRemote()
+		local rf = ReplicatedStorage:FindFirstChild("RemotesFolder") or ReplicatedStorage:FindFirstChild("Remotes")
+		return rf and rf:FindFirstChild("MotorReplication")
+	end
+	local function present(names)
+		for inst, o in pairs(ents) do
+			if o.cat == "entity" and names[inst.Name] then return true end
+		end
+		return false
+	end
+	task.spawn(function()
+		local warned = false
+		while true do
+			task.wait(0.3)
+			local want = (S.bpEyes and present({ Eyes = true })) or (S.bpLookman and present({ Lookman = true, BackdoorLookman = true }))
+			if want then
+				local r = motorRemote()
+				if r then
+					pcall(function()
+						if S.bpOldFloor then r:FireServer(0, -65, 0, false) else r:FireServer(-650) end
+					end)
+				elseif not warned then
+					warned = true
+					notify("MotorReplication remote'u bulunamadı (ReplicatedStorage.RemotesFolder)", "warn")
+				end
+			end
+		end
 	end)
 end
 
@@ -1932,7 +2653,7 @@ do
 			if n % 2000 == 0 then task.wait() end
 		end
 	end)
-	workspace.DescendantAdded:Connect(function(d)
+	X.onAdded(function(d)
 		if d:IsA("ProximityPrompt") then prompts[d] = true end
 	end)
 	workspace.DescendantRemoving:Connect(function(d) prompts[d] = nil end)
@@ -2573,7 +3294,7 @@ RunService.RenderStepped:Connect(function(dt)
 	if S.espOn then updateESP() end
 	if S.entOn then
 		X.entT = (X.entT or 0) + dt
-		if X.entT >= 0.1 then -- saniyede 10 kez, boyut gecisi akici olsun
+		if X.entT >= 0.15 then
 			X.entT = 0
 			updateEntities()
 		end
