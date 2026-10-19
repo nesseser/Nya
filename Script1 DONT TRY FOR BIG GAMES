@@ -1,4 +1,4 @@
-<roblox version="4"><Item class="LocalScript" referent="RBX0"><Properties><string name="Name">HunterPanel</string><bool name="Disabled">false</bool><token name="RunContext">0</token><ProtectedString name="Source"><![CDATA[--// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
+--// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -246,15 +246,23 @@ local modalBtn = new("TextButton", {
 	Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, Text = "", Modal = true, NoBind = true,
 }, gui)
 -- panel aciksa imlec noktasi (birinci sahiste sistem imleci gorunmez)
+-- ayri, en ustte duran ScreenGui (oyunun UI'lari ustune cikmasin)
+local cursorGui = new("ScreenGui", {
+	Name = "HunterCursor", ResetOnSpawn = false, DisplayOrder = 2147483647, IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+}, player:WaitForChild("PlayerGui"))
 local cursorDot = new("Frame", {
-	Size = UDim2.fromOffset(8, 8), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Color3.new(1, 1, 1),
-	BorderSizePixel = 0, ZIndex = 1000, Visible = false, NoBind = true,
-}, gui)
+	Size = UDim2.fromOffset(14, 14), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Color3.fromRGB(255, 60, 60),
+	BorderSizePixel = 0, Visible = false, NoBind = true,
+}, cursorGui)
 new("UICorner", { CornerRadius = UDim.new(1, 0) }, cursorDot)
-new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1.5, NoBind = true }, cursorDot)
+new("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2, NoBind = true }, cursorDot)
 RunService.RenderStepped:Connect(function()
 	cursorDot.Visible = main.Visible
 	if main.Visible then
+		if UserInputService.MouseBehavior ~= Enum.MouseBehavior.Default then
+			UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+		end
 		local p = UserInputService:GetMouseLocation()
 		cursorDot.Position = UDim2.fromOffset(p.X, p.Y)
 	end
@@ -1508,4 +1516,3 @@ if player.Character then task.spawn(hookDeath, player.Character) end
 setBgImage()
 notify(PANEL_NAME .. " yüklendi  •  K ile aç/kapat", "ok")
 addLog("panel", PANEL_NAME .. " yüklendi")
-]]></ProtectedString></Properties></Item></roblox>
