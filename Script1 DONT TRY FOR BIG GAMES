@@ -132,6 +132,7 @@ local S = {
 	rQuick = true, rItems = true, rDoors = true, rReturn = true, rRange = 40, rDelay = 0.1,
 	autoHeal = false, healInterval = 0.1,
 	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
+	dodge = false, dodgeTime = 1, dodgeMin = 12, dodgeFar = 600, dodgeStay = 1.2, dodgeBack = 35,
 	noEntDmg = true, flee = false, fleeDist = 25,
 	infStamina = false, fastPrompt = false, farPrompt = false, antiAfk = true,
 	staminaNames = "stamina,energy,sprint,mana,oxygen,breath,fuel,battery,flashlight",
@@ -164,6 +165,7 @@ local function teleportTo(cf)
 	root.CFrame = cf
 	X.lastPos = nil
 	root.AssemblyLinearVelocity = Vector3.zero
+	root.AssemblyAngularVelocity = Vector3.zero
 end
 
 ------------------------------------------------------------------
@@ -1094,6 +1096,37 @@ do
 		if S.noTouch and isKill(d) then disableKill(d) end
 	end)
 
+	-- yaratik tam dokunacagi anin ~1 sn oncesinde karakteri uzaga firlat, yaratik gecince eski yere geri koy
+	function X.dodgeAway()
+		local root = getRoot()
+		if X.dodging or not root then return end
+		X.dodging = true
+		local origin = root.CFrame
+		task.spawn(function()
+			X.hold = true
+			teleportTo(origin + Vector3.new(0, S.dodgeFar, 0))
+			notify("Yaratık yaklaştı, uzağa fırlatıldın", "warn")
+			local t0 = os.clock()
+			while os.clock() - t0 < 15 and getRoot() do
+				task.wait(0.1)
+				if os.clock() - t0 >= S.dodgeStay then
+					local clear = true
+					for _, o in pairs(ents) do
+						if o.cat == "entity" and o.part and o.part:IsDescendantOf(workspace)
+							and (o.part.Position - origin.Position).Magnitude < S.dodgeBack then
+							clear = false
+							break
+						end
+					end
+					if clear then break end
+				end
+			end
+			if getRoot() then teleportTo(origin) end
+			X.hold = false
+			X.dodging = false
+		end)
+	end
+
 	function X.restoreEntDmg()
 		for p in pairs(dmgOrig) do
 			if p.Parent then p.CanTouch = true end
@@ -1116,6 +1149,11 @@ do
 	end
 
 	function X.update(dt, hum, root)
+		-- isinlanma / kacis sirasinda fizik karakteri firlatmasin
+		if X.hold then
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+		end
 		-- sunucu bizi geri attiysa (tek karede buyuk sicrama) eski konuma dondur
 		local pos = root.Position
 		if S.antiRubber and (S.speedOn or S.flyOn) and X.lastPos and dt < 0.25 then
@@ -1180,6 +1218,26 @@ do
 						notify("Yaratık yaklaştı, kaçıldı", "warn")
 					end
 					break
+				end
+			end
+		end
+
+		-- yaratik yaklasma hizindan "1 sn sonra dokunur" tahmini
+		if S.dodge and not X.dodging then
+			local now = os.clock()
+			for _, o in pairs(ents) do
+				if o.cat == "entity" and o.part and o.part:IsDescendantOf(workspace) then
+					local d = (o.part.Position - root.Position).Magnitude
+					local trigger = d < S.dodgeMin
+					if o.pD and now > o.pT then
+						local closing = (o.pD - d) / (now - o.pT)
+						if closing > 2 and d / closing < S.dodgeTime then trigger = true end
+					end
+					o.pD, o.pT = d, now
+					if trigger then
+						X.dodgeAway()
+						break
+					end
 				end
 			end
 		end
@@ -1323,6 +1381,7 @@ local pPlayer = createTab("Oyuncu", "👤")
 local pMove = createTab("Hareket", "🏃")
 local pTp = createTab("Işınlan", "📍")
 local pItem = createTab("Eşya", "🎒")
+local pDepo = createTab("Depo", "📦")
 local pLog = createTab("Sunucu", "📡", true)
 local pVis = createTab("Görsel", "👁")
 local pSet = createTab("Ayarlar", "⚙")
@@ -1393,6 +1452,12 @@ addToggle(pPlayer, "Yaratık hasarını engelle (dokunma kapat)", true, function
 end, "noEntDmg")
 addToggle(pPlayer, "Yaratık yaklaşınca güvenli noktaya kaç", false, function(v) S.flee = v end, "flee")
 addSlider(pPlayer, "Kaçış mesafesi (stud)", 5, 100, S.fleeDist, function(v) S.fleeDist = v end, 1, "fleeDist")
+addToggle(pPlayer, "Yaratık dokunmadan ~1 sn önce uzağa fırlat, sonra geri koy", false, function(v) S.dodge = v end, "dodge")
+addSlider(pPlayer, "Tahmin süresi (sn)", 0.3, 3, S.dodgeTime, function(v) S.dodgeTime = v end, 0.1, "dodgeTime")
+addSlider(pPlayer, "Her zaman tetik mesafesi (stud)", 5, 60, S.dodgeMin, function(v) S.dodgeMin = v end, 1, "dodgeMin")
+addSlider(pPlayer, "Fırlatma yüksekliği (stud)", 100, 3000, S.dodgeFar, function(v) S.dodgeFar = v end, 50, "dodgeFar")
+addSlider(pPlayer, "En az kalma süresi (sn)", 0.3, 5, S.dodgeStay, function(v) S.dodgeStay = v end, 0.1, "dodgeStay")
+addSlider(pPlayer, "Geri dönmek için yaratık uzaklığı", 10, 150, S.dodgeBack, function(v) S.dodgeBack = v end, 5, "dodgeBack")
 addButton(pPlayer, "📌  Güvenli nokta kaydet (şu anki konum)", function()
 	local r = getRoot()
 	if r then X.safeCF = r.CFrame; notify("Güvenli nokta kaydedildi", "ok") end
@@ -1525,6 +1590,109 @@ do
 		miniBtn(rw, "Git", -118, function() teleportTo(cf) end)
 		miniBtn(rw, "Sil", -60, function() rw:Destroy() end)
 	end)
+end
+
+-- DEPO: istemcinin gorebildigi yerlerdeki Tool'lari listele, kendine ver (sadece yerel)
+do
+	local StarterPack = game:GetService("StarterPack")
+	local roots = {
+		ReplicatedStorage, StarterPack, workspace, Lighting,
+		game:GetService("ReplicatedFirst"), game:GetService("StarterGui"),
+	}
+	local found, filter, scanning = {}, "", false
+
+	local function give(tool)
+		local bp = player:FindFirstChildOfClass("Backpack") or player:WaitForChild("Backpack", 3)
+		if not bp then notify("Backpack bulunamadı", "bad") return end
+		local ok, clone = pcall(function() return tool:Clone() end)
+		if not ok or not clone then notify("Kopyalanamadı: " .. tool.Name, "bad") return end
+		clone.Parent = bp
+		notify(tool.Name .. " çantana eklendi (sadece yerel)", "ok")
+	end
+
+	addSection(pDepo, "Tool deposu")
+	local info = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 44), BackgroundTransparency = 1, TextWrapped = true, TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+		Text = "",
+	}, pDepo)
+	local listBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pDepo)
+	new("UIListLayout", { Padding = UDim.new(0, 5) }, listBox)
+
+	local function rebuild()
+		for _, c in ipairs(listBox:GetChildren()) do
+			if c:IsA("Frame") then c:Destroy() end
+		end
+		local f, n = filter:lower(), 0
+		for _, t in ipairs(found) do
+			if t.Parent and (f == "" or t.Name:lower():find(f, 1, true)) then
+				n += 1
+				if n > 40 then break end
+				local r = row(listBox, 40)
+				new("TextLabel", {
+					Size = UDim2.new(1, -76, 0, 18), Position = UDim2.fromOffset(10, 3), BackgroundTransparency = 1, Text = t.Name,
+					TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, r)
+				new("TextLabel", {
+					Size = UDim2.new(1, -76, 0, 14), Position = UDim2.fromOffset(10, 21), BackgroundTransparency = 1, Text = t:GetFullName(),
+					TextColor3 = T.sub, Font = Enum.Font.Gotham, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
+					TextTruncate = Enum.TextTruncate.AtEnd,
+				}, r)
+				miniBtn(r, "Ver", -60, function() give(t) end)
+			end
+		end
+		local ss = #game:GetService("ServerStorage"):GetChildren()
+		info.Text = string.format("%d tool bulundu (en fazla 40 listelenir).\nServerStorage istemciye hiç gönderilmez, burada görünmez (şu an %d öğe).", #found, ss)
+	end
+
+	local function scan()
+		if scanning then return end
+		scanning = true
+		task.spawn(function()
+			table.clear(found)
+			local n = 0
+			for _, r in ipairs(roots) do
+				for _, d in ipairs(r:GetDescendants()) do
+					if (d:IsA("Tool") or d:IsA("HopperBin")) and not (d.Parent and d.Parent:FindFirstChildOfClass("Humanoid")) then
+						table.insert(found, d)
+					end
+					n += 1
+					if n % 2000 == 0 then task.wait() end
+				end
+			end
+			scanning = false
+			rebuild()
+		end)
+	end
+
+	addButton(pDepo, "🔄  Tara (ReplicatedStorage, StarterPack, Workspace...)", scan, "accent")
+	addTextBox(pDepo, "Ara:", "", function(t) filter = t; rebuild() end)
+	addTextBox(pDepo, "Ada göre ver:", "", function(t)
+		local q = t:lower()
+		if q == "" then return end
+		for _, tool in ipairs(found) do
+			if tool.Parent and tool.Name:lower():find(q, 1, true) then give(tool) return end
+		end
+		notify("'" .. t .. "' adında tool bulunamadı, önce Tara", "warn")
+	end)
+
+	addSection(pDepo, "ReplicatedStorage içeriği")
+	local rsBox = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, TextWrapped = true,
+		TextColor3 = T.sub, Font = Enum.Font.Code, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+		TextYAlignment = Enum.TextYAlignment.Top, Text = "",
+	}, pDepo)
+	addButton(pDepo, "📋  İçeriği listele", function()
+		local lines = {}
+		for i, c in ipairs(ReplicatedStorage:GetChildren()) do
+			if i > 60 then lines[#lines + 1] = "..."; break end
+			lines[#lines + 1] = c.ClassName .. "  " .. c.Name
+		end
+		rsBox.Text = #lines > 0 and table.concat(lines, "\n") or "(boş)"
+	end)
+
+	task.delay(3, scan)
 end
 
 -- ESYA LISTESI + OTOMATIK TOPLAMA
@@ -1681,6 +1849,7 @@ do
 		quickBusy = true
 		task.spawn(function()
 			local origin = root.CFrame
+			X.hold = true -- isinlanirken fizik firlatmasin
 			local targets = {}
 			for d in pairs(prompts) do
 				if d.Parent and d.Enabled then
@@ -1703,8 +1872,11 @@ do
 				if not r then break end
 				if t.part.Parent and t.p.Parent then
 					if (t.part.Position - r.Position).Magnitude > math.max(4, t.p.MaxActivationDistance * 0.7) then
-						teleportTo(CFrame.new(t.part.Position + Vector3.new(0, 3, 0)))
-						task.wait(0.05)
+						-- parcanin icine degil, ona dogru bakan tarafina dur
+						local away = (origin.Position - t.part.Position) * Vector3.new(1, 0, 1)
+						away = away.Magnitude > 0.1 and away.Unit or Vector3.zAxis
+						teleportTo(CFrame.new(t.part.Position + away * 3 + Vector3.new(0, 2, 0)))
+						task.wait(0.08)
 					end
 					pcall(firePrompt, t.p)
 					n += 1
@@ -1712,6 +1884,7 @@ do
 				end
 			end
 			if S.rReturn and getRoot() then teleportTo(origin) end
+			if not X.dodging then X.hold = false end
 			notify(n > 0 and ("R: " .. n .. " etkileşim yapıldı") or "R: yakında etkileşim yok", n > 0 and "ok" or "warn")
 			quickBusy = false
 		end)
@@ -2336,7 +2509,7 @@ end
 local function setupChar(char)
 	camera = workspace.CurrentCamera
 	flyBV, flyBG, safePos = nil, nil, nil
-	X.lastPos, X.speeding = nil, false
+	X.lastPos, X.speeding, X.dodging, X.hold = nil, false, false, false
 	task.spawn(hookDeath, char)
 	local root = char:WaitForChild("HumanoidRootPart", 10)
 	if not root then return end
