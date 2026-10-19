@@ -114,10 +114,10 @@ local S = {
 	respawnAtDeath = true,
 	fovOn = false, fov = 70,
 	fullbright = false,
-	espOn = false, espHighlight = true, espName = true, espDist = true, espTeam = false, espMax = 5000,
+	espOn = false, espHighlight = true, espName = true, espDist = true, espTeam = false, espMax = 1500,
 	entOn = true, entHighlight = true,
 	entIgnore = "terrain,camera,baseplate,spawnlocation,handle,hitbox,hurtbox,frame,wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window,knob,hinge,doorway,jamb,trim,panel",
-	entDoor = true, entDoorHl = true, entHide = true, entItem = false, entObjHl = false, objMax = 150,
+	entMax = 600, doorMax = 300, entDoor = true, entDoorHl = true, entHide = true, entItem = false, entObjHl = false, objMax = 150,
 	entDoors = "door,kapi", entHides = "wardrobe,closet,locker,cabinet,dolap,hide,bed", entItems = "key,coin,item,pickup,chest",
 	entDanger = "rush,ambush,seek,figure,screech,eyes,halt,jeff,boss,monster,enemy,zombie,killer",
 	hbViz = false,
@@ -126,6 +126,11 @@ local S = {
 	bgId = BG_IMAGE_ID, bgTrans = 0.35,
 	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
 	antiSlip = false, noTouch = true,
+	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
+	noEntDmg = false, flee = false, fleeDist = 25,
+	infStamina = false, fastPrompt = false, farPrompt = false, antiAfk = true,
+	staminaNames = "stamina,energy,sprint,mana,oxygen,breath,fuel,battery,flashlight",
+	infFood = false, foodNames = "food,hunger,hungry,satiety,thirst,water,drink,eat,starv,yemek,aclik,susuzluk,tokluk",
 	autoCollect = false, collectMode = "Yürü", collectSpeed = 60, collectDelay = 0.4, collectMax = 2000,
 	killNames ="kill,lava,death,damage,hurt,trap,spike,acid,laser,fire,poison,void,zap,electric",
 	godMode = false, clockOn = false, clockTime = 14, noFog = false, crosshair = false,
@@ -690,11 +695,15 @@ local function updateESP()
 			local char = plr.Character
 			local root = char and char:FindFirstChild("HumanoidRootPart")
 			if char and root then
+				local dist = myRoot and (root.Position - myRoot.Position).Magnitude or 0
+				if dist > S.espMax then
+					removeESP(plr)
+					continue
+				end
 				local o = espObjs[plr]
 				if o and o.char ~= char then removeESP(plr); o = nil end
 				if not o then o = buildESP(plr, char, root) end
-				local dist = myRoot and (root.Position - myRoot.Position).Magnitude or 0
-				local vis = dist <= S.espMax
+				local vis = true
 				local color = S.espTeam and plr.TeamColor.Color or Color3.fromRGB(255, 80, 80)
 				o.hl.Enabled = vis and S.espHighlight
 				o.hl.FillColor = color
@@ -750,6 +759,7 @@ local function classify(inst)
 		if inst:IsA("BasePart") and not listHas(S.entIgnore, name) then
 			if S.entDoor and listHas(S.entDoors, name) then return "door" end
 			if S.entItem and listHas(S.entItems, name) then return "item" end
+			if S.entChest and listHas(S.entChests, name) then return "chest" end
 		end
 		return nil
 	end
@@ -760,10 +770,11 @@ local function classify(inst)
 	if S.entDoor and listHas(S.entDoors, name) then return "door" end
 	if S.entHide and listHas(S.entHides, name) then return "hide" end
 	if S.entItem and listHas(S.entItems, name) then return "item" end
+	if S.entChest and listHas(S.entChests, name) then return "chest" end
 	return nil
 end
 
-local CAT_ICON = { entity = "☠ ", door = "🚪 ", hide = "🗄 ", item = "★ " }
+local CAT_ICON = { entity = "☠ ", door = "🚪 ", hide = "🗄 ", item = "★ ", chest = "📦 " }
 
 local function makeHl(inst, color)
 	return new("Highlight", {
@@ -786,19 +797,9 @@ local function trackEntity(inst, silent)
 	if not part then return end
 
 	local color = cat == "entity" and (danger and T.bad or T.orange)
-		or cat == "door" and T.info or cat == "hide" and T.ok or T.warn
+		or cat == "door" and T.info or cat == "hide" and T.ok or cat == "chest" and T.purple or T.warn
 	local o = { part = part, cat = cat, color = color }
-	o.bb = new("BillboardGui", {
-		Adornee = part, Size = UDim2.fromOffset(180, 40), StudsOffset = Vector3.new(0, 3, 0), AlwaysOnTop = true,
-	}, gui)
-	new("TextLabel", {
-		Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, Text = (danger and "☠ " or CAT_ICON[cat]) .. inst.Name,
-		TextColor3 = color, TextStrokeTransparency = 0, Font = Enum.Font.GothamBold, TextScaled = true, NoBind = true,
-	}, o.bb)
-	o.distLbl = new("TextLabel", {
-		Size = UDim2.new(1, 0, 0.45, 0), Position = UDim2.new(0, 0, 0.55, 0), BackgroundTransparency = 1,
-		TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0, Font = Enum.Font.Gotham, TextScaled = true, NoBind = true,
-	}, o.bb)
+	o.text = (danger and "☠ " or CAT_ICON[cat]) .. inst.Name
 	ents[inst] = o
 	-- once alt parcalar izlendiyse (door frame vb.), sadece en dis kapiyi birak
 	for other in pairs(ents) do
@@ -839,7 +840,8 @@ X.refreshEnt()
 workspace.DescendantAdded:Connect(function(d)
 	if not S.entOn then return end
 	local ok = d:IsA("Model") or d:IsA("Tool") or (d:IsA("BasePart")
-		and ((S.entDoor and listHas(S.entDoors, d.Name)) or (S.entItem and listHas(S.entItems, d.Name))))
+		and ((S.entDoor and listHas(S.entDoors, d.Name)) or (S.entItem and listHas(S.entItems, d.Name))
+		or (S.entChest and listHas(S.entChests, d.Name))))
 	if not ok then return end
 	local silent = os.clock() - startTime < 4
 	task.delay(0.2, function()
@@ -848,6 +850,29 @@ workspace.DescendantAdded:Connect(function(d)
 end)
 
 local MAX_DOOR_HL = 24 -- Roblox ayni anda ~31 highlight cizer; en yakin kapilara verilir
+
+-- etiket sadece menzile girince olusturulur, cikinca silinir (uzaktakiler hic cizilmez)
+local function ensureBb(o)
+	if o.bb then return end
+	o.bb = new("BillboardGui", {
+		Adornee = o.part, Size = UDim2.fromOffset(180, 40), StudsOffset = Vector3.new(0, 3, 0), AlwaysOnTop = true,
+	}, gui)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, Text = o.text,
+		TextColor3 = o.color, TextStrokeTransparency = 0, Font = Enum.Font.GothamBold, TextScaled = true, NoBind = true,
+	}, o.bb)
+	o.distLbl = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.45, 0), Position = UDim2.new(0, 0, 0.55, 0), BackgroundTransparency = 1,
+		TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0, Font = Enum.Font.Gotham, TextScaled = true, NoBind = true,
+	}, o.bb)
+end
+local function dropBb(o)
+	if o.bb then
+		o.bb:Destroy()
+		o.bb, o.distLbl, o.lastDist = nil, nil, nil
+	end
+end
+
 local function updateEntities()
 	local myRoot = getRoot()
 	local doors = {}
@@ -856,25 +881,37 @@ local function updateEntities()
 			untrackEntity(inst)
 		else
 			if not o.part:IsDescendantOf(workspace) then
+				dropBb(o)
 				o.part = inst:IsA("BasePart") and inst or inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
-				o.bb.Adornee = o.part
 			end
-			if o.part then
-				local dist = myRoot and (o.part.Position - myRoot.Position).Magnitude or 0
+			local cat = o.cat
+			if o.part and myRoot then
+				local dist = (o.part.Position - myRoot.Position).Magnitude
 				o.dist = dist
-				local cat = o.cat
-				-- varlik ve kapilar mesafeden bagimsiz gorunur, digerleri max mesafeye kadar
-				local visible = cat == "entity" or cat == "door" or dist <= S.objMax
-				o.bb.Enabled = visible
-				if visible then o.distLbl.Text = string.format("%d stud", math.floor(dist + 0.5)) end
+				local lim = cat == "entity" and S.entMax or cat == "door" and S.doorMax or S.objMax
+				local visible = dist <= lim
+				if visible then
+					ensureBb(o)
+					o.bb.Adornee = o.part
+					local d = math.floor(dist + 0.5)
+					if d ~= o.lastDist then
+						o.lastDist = d
+						o.distLbl.Text = d .. " stud"
+					end
+				else
+					dropBb(o)
+				end
 				if cat == "entity" then
 					o.wantHl = visible and S.entHighlight
 				elseif cat == "door" then
 					o.wantHl = false
-					if S.entDoorHl then table.insert(doors, o) end
+					if visible and S.entDoorHl then table.insert(doors, o) end
 				else
 					o.wantHl = visible and S.entObjHl
 				end
+			else
+				o.wantHl = false
+				dropBb(o)
 			end
 		end
 	end
@@ -943,6 +980,7 @@ do
 
 	-- sadece oldurucu bloklarin dokunmasini kapat (kapi vb. etkilenmez)
 	local killOrig = {}
+	local dmgOrig, lastFlee = {}, 0
 	local function isKill(p)
 		if not p:IsA("BasePart") then return false end
 		if listHas(S.killNames, p.Name) then return true end
@@ -978,6 +1016,13 @@ do
 		if S.noTouch and isKill(d) then disableKill(d) end
 	end)
 
+	function X.restoreEntDmg()
+		for p in pairs(dmgOrig) do
+			if p.Parent then p.CanTouch = true end
+		end
+		table.clear(dmgOrig)
+	end
+
 	function X.restoreSlip()
 		for part, orig in pairs(floorOrig) do
 			if part.Parent then part.CustomPhysicalProperties = orig or nil end
@@ -1009,6 +1054,34 @@ do
 		acc = 0
 		local c = hum.Parent
 
+		-- yaratik hasari: yaratigin parcalarinin dokunmasini kapat
+		if S.noEntDmg then
+			for inst, o in pairs(ents) do
+				if o.cat == "entity" and (o.dist or 1e9) < 250 and inst:IsDescendantOf(workspace) then
+					for _, p in ipairs(inst:GetDescendants()) do
+						if p:IsA("BasePart") and p.CanTouch then
+							dmgOrig[p] = true
+							p.CanTouch = false
+						end
+					end
+				end
+			end
+		end
+		-- yaratik cok yaklasirsa guvenli noktaya kac
+		if S.flee and os.clock() - lastFlee > 2 then
+			for _, o in pairs(ents) do
+				if o.cat == "entity" and o.dist and o.dist < S.fleeDist then
+					local dest = X.safeCF or safePos
+					if dest then
+						lastFlee = os.clock()
+						teleportTo(dest + Vector3.new(0, 5, 0))
+						notify("Yaratık yaklaştı, kaçıldı", "warn")
+					end
+					break
+				end
+			end
+		end
+
 		if S.antiSlip then
 			if slipChar ~= c then
 				slipChar = c
@@ -1024,6 +1097,115 @@ do
 			end
 		end
 	end
+end
+
+-- SONSUZ STAMINA / ENERJI, HIZLI ETKILESIM, ANTI-AFK
+do
+	local VirtualUser = game:GetService("VirtualUser")
+	local maxSeen = setmetatable({}, { __mode = "k" })
+
+	local function isStat(name)
+		if name:lower():find("max", 1, true) then return false end
+		return (S.infStamina and listHas(S.staminaNames, name)) or (S.infFood and listHas(S.foodNames, name))
+	end
+	local function numOf(c)
+		if c and (c:IsA("NumberValue") or c:IsA("IntValue")) then return c.Value end
+	end
+	-- en yuksek gorulen deger (veya oyunun kendi Max degeri) kadar doldur
+	local function maxFor(obj, name, current)
+		local store = maxSeen[obj]
+		if not store then store = {}; maxSeen[obj] = store end
+		local m = math.max(store[name] or 0, current)
+		for _, cand in ipairs({ "Max" .. name, name .. "Max", "Max_" .. name, name .. "_Max" }) do
+			local v = obj:GetAttribute(cand)
+			if typeof(v) ~= "number" then v = numOf(obj:FindFirstChild(cand)) end
+			if typeof(v) == "number" and v > m then m = v end
+		end
+		store[name] = m
+		return m
+	end
+	local function scanObj(obj)
+		for name, val in pairs(obj:GetAttributes()) do
+			if typeof(val) == "number" and isStat(name) then
+				local m = maxFor(obj, name, val)
+				if val < m then obj:SetAttribute(name, m) end
+			end
+		end
+		for _, c in ipairs(obj:GetChildren()) do
+			local v = numOf(c)
+			if v and isStat(c.Name) then
+				local m = maxFor(obj, c.Name, v)
+				if v < m then c.Value = m end
+			end
+		end
+	end
+	local acc = 0
+	RunService.Heartbeat:Connect(function(dt)
+		if not (S.infStamina or S.infFood) then return end
+		acc += dt
+		if acc < 0.15 then return end
+		acc = 0
+		scanObj(player)
+		local char, hum = getChar(), getHum()
+		if char then scanObj(char) end
+		if hum then scanObj(hum) end
+		for _, c in ipairs(player:GetChildren()) do
+			if c:IsA("Folder") then scanObj(c) end
+		end
+		if char then
+			for _, c in ipairs(char:GetChildren()) do
+				if c:IsA("Folder") then scanObj(c) end
+			end
+		end
+	end)
+
+	-- ProximityPrompt: aninda etkilesim + uzaktan etkilesim
+	local promptOrig = {}
+	local function applyPrompt(p)
+		if not p:IsA("ProximityPrompt") then return end
+		if not promptOrig[p] then
+			promptOrig[p] = { p.HoldDuration, p.MaxActivationDistance, p.RequiresLineOfSight }
+		end
+		local o = promptOrig[p]
+		if S.fastPrompt then p.HoldDuration = 0 end
+		if S.farPrompt then
+			p.MaxActivationDistance = o[2] * 3
+			p.RequiresLineOfSight = false
+		end
+	end
+	local promptScan = 0
+	function X.refreshPrompts()
+		promptScan += 1
+		local id = promptScan
+		for p, o in pairs(promptOrig) do
+			if p.Parent then
+				p.HoldDuration, p.MaxActivationDistance, p.RequiresLineOfSight = o[1], o[2], o[3]
+			end
+		end
+		table.clear(promptOrig)
+		if not (S.fastPrompt or S.farPrompt) then return end
+		task.spawn(function()
+			local n = 0
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if id ~= promptScan then return end
+				if d:IsA("ProximityPrompt") then applyPrompt(d) end
+				n += 1
+				if n % 1500 == 0 then task.wait() end
+			end
+		end)
+	end
+	workspace.DescendantAdded:Connect(function(d)
+		if (S.fastPrompt or S.farPrompt) and d:IsA("ProximityPrompt") then applyPrompt(d) end
+	end)
+
+	player.Idled:Connect(function()
+		if S.antiAfk then
+			pcall(function()
+				VirtualUser:CaptureController()
+				VirtualUser:ClickButton2(Vector2.new())
+			end)
+		end
+	end)
 end
 
 -- crosshair + FPS/ping gostergesi
@@ -1091,6 +1273,31 @@ addSlider(pPlayer, "Zıplama gücü", 0, 400, S.jump, function(v) S.jump = v end
 addToggle(pPlayer, "Sonsuz zıplama", false, function(v) S.infJump = v end, "infJump")
 addToggle(pPlayer, "Anti-Void (düşünce geri çek)", true, function(v) S.antiVoid = v end, "antiVoid")
 addToggle(pPlayer, "God mode (local can kilidi)", false, function(v) S.godMode = v end, "godMode")
+addSection(pPlayer, "Yaratık koruması")
+addToggle(pPlayer, "Yaratık hasarını engelle (dokunma kapat)", false, function(v)
+	S.noEntDmg = v
+	if not v then X.restoreEntDmg() end
+end, "noEntDmg")
+addToggle(pPlayer, "Yaratık yaklaşınca güvenli noktaya kaç", false, function(v) S.flee = v end, "flee")
+addSlider(pPlayer, "Kaçış mesafesi (stud)", 5, 100, S.fleeDist, function(v) S.fleeDist = v end, 1, "fleeDist")
+addButton(pPlayer, "📌  Güvenli nokta kaydet (şu anki konum)", function()
+	local r = getRoot()
+	if r then X.safeCF = r.CFrame; notify("Güvenli nokta kaydedildi", "ok") end
+end)
+addSection(pPlayer, "Enerji / Etkileşim")
+addToggle(pPlayer, "Sonsuz stamina / enerji", false, function(v) S.infStamina = v end, "infStamina")
+addTextBox(pPlayer, "İsimler:", S.staminaNames, function(t) S.staminaNames = t end, "staminaNames")
+addToggle(pPlayer, "Yemek / su barını hep full tut", false, function(v) S.infFood = v end, "infFood")
+addTextBox(pPlayer, "Yemek adı:", S.foodNames, function(t) S.foodNames = t end, "foodNames")
+addToggle(pPlayer, "Anında etkileşim (basılı tutma yok)", false, function(v)
+	S.fastPrompt = v
+	X.refreshPrompts()
+end, "fastPrompt")
+addToggle(pPlayer, "Etkileşim mesafesi x3", false, function(v)
+	S.farPrompt = v
+	X.refreshPrompts()
+end, "farPrompt")
+addToggle(pPlayer, "Anti-AFK", true, function(v) S.antiAfk = v end, "antiAfk")
 
 -- HAREKET
 addSection(pMove, "Fly  (F)")
@@ -1215,7 +1422,7 @@ do
 		if not root then return nil end
 		local best, bd
 		for inst, o in pairs(ents) do
-			if o.cat == "item" and o.part and o.part:IsDescendantOf(workspace)
+			if (o.cat == "item" or (o.cat == "chest" and S.collectChest)) and o.part and o.part:IsDescendantOf(workspace)
 				and (not tried[inst] or os.clock() - tried[inst] > 30) then
 				local d = (itemPos(o) - root.Position).Magnitude
 				if d <= S.collectMax and (not bd or d < bd) then best, bd = inst, d end
@@ -1301,13 +1508,23 @@ do
 		X.refreshEnt()
 	end, "entItem")
 	addTextBox(pItem, "Eşya adı:", S.entItems, function(t) S.entItems = t; X.refreshEnt() end, "entItems")
+	addToggle(pItem, "Sandık / kasa gibi şeyleri izle", false, function(v)
+		S.entChest = v
+		X.refreshEnt()
+	end, "entChest")
+	addTextBox(pItem, "Sandık adı:", S.entChests, function(t) S.entChests = t; X.refreshEnt() end, "entChests")
 	addSection(pItem, "Otomatik toplama")
+	addToggle(pItem, "Toplarken sandıkları da aç", true, function(v) S.collectChest = v end, "collectChest")
 	addToggle(pItem, "Otomatik topla (en yakından başla)", false, function(v)
 		S.autoCollect = v
 		if v then
 			if not S.entItem then
 				registry.entItem.set(true)
 				registry.entItem.cb(true)
+			end
+			if S.collectChest and not S.entChest then
+				registry.entChest.set(true)
+				registry.entChest.cb(true)
 			end
 			notify("Otomatik toplama başladı", "ok")
 			X.startCollect()
@@ -1344,7 +1561,7 @@ do
 		local root = getRoot()
 		local arr = {}
 		for inst, o in pairs(ents) do
-			if o.cat == "item" and o.part then
+			if (o.cat == "item" or o.cat == "chest") and o.part then
 				table.insert(arr, { inst = inst, d = root and (itemPos(o) - root.Position).Magnitude or 0 })
 			end
 		end
@@ -1460,10 +1677,12 @@ addToggle(pVis, "İzleyici aktif", true, function(v)
 end, "entOn")
 addToggle(pVis, "Varlık highlight (humanoid / tehlikeli)", true, function(v) S.entHighlight = v end, "entHighlight")
 addToggle(pVis, "Kapıları göster", true, function(v) S.entDoor = v; X.refreshEnt() end, "entDoor")
-addToggle(pVis, "Kapı highlight (en yakın 24, her mesafe)", true, function(v) S.entDoorHl = v end, "entDoorHl")
+addToggle(pVis, "Kapı highlight (en yakın 24)", true, function(v) S.entDoorHl = v end, "entDoorHl")
 addToggle(pVis, "Dolap / saklanma yerlerini göster", true, function(v) S.entHide = v; X.refreshEnt() end, "entHide")
 addToggle(pVis, "Kapı/dolap highlight (en fazla ~31)", false, function(v) S.entObjHl = v end, "entObjHl")
-addSlider(pVis, "Kapı/dolap/eşya max mesafe", 20, 1000, S.objMax, function(v) S.objMax = v end, 10, "objMax")
+addSlider(pVis, "Varlık max mesafe", 50, 3000, S.entMax, function(v) S.entMax = v end, 50, "entMax")
+addSlider(pVis, "Kapı max mesafe", 20, 2000, S.doorMax, function(v) S.doorMax = v end, 10, "doorMax")
+addSlider(pVis, "Dolap/eşya max mesafe", 20, 1000, S.objMax, function(v) S.objMax = v end, 10, "objMax")
 addToggle(pVis, "Sesli uyarı (yeni varlık)", true, function(v) S.soundOn = v end, "soundOn")
 addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t; X.refreshEnt() end, "entDanger")
 addTextBox(pVis, "Kapı:", S.entDoors, function(t) S.entDoors = t; X.refreshEnt() end, "entDoors")
@@ -1776,7 +1995,13 @@ RunService.RenderStepped:Connect(function(dt)
 	end
 	if S.fovOn and camera.FieldOfView ~= S.fov then camera.FieldOfView = S.fov end
 	if S.espOn then updateESP() end
-	if S.entOn then updateEntities() end
+	if S.entOn then
+		X.entT = (X.entT or 0) + dt
+		if X.entT >= 0.2 then -- saniyede 5 kez yeter
+			X.entT = 0
+			updateEntities()
+		end
+	end
 	if S.hbViz then updateHbViz() end
 	if S.fullbright then
 		Lighting.Brightness = 3
