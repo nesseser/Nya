@@ -130,6 +130,7 @@ local S = {
 	lootWords = "pick,take,loot,collect,search,drawer,chest,crate,safe,item,key,coin,grab,cekmece,sandik,topla,cabinet,dresser,desk",
 	nearSkip = "hide,enter,exit,sit,seat,drive,ride,leave,lever,switch,button,sleep,bed",
 	rQuick = true, rItems = true, rDoors = true, rReturn = true, rRange = 40, rDelay = 0.1,
+	fakeWords = "fake,decoy,false,sahte,mimic,illusion,dummy",
 	autoHeal = false, healInterval = 0.1,
 	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
 	dodge = false, dodgeTime = 1, dodgeMin = 12, dodgeFar = 600, dodgeStay = 1.2, dodgeBack = 35,
@@ -811,6 +812,16 @@ local function classify(inst)
 	return nil
 end
 
+-- sahte kapi: kendisi veya ust modellerinden birinin adi sahte kelimelerinden birini iceriyorsa
+local function isFakeDoor(inst)
+	local a = inst
+	while a and a ~= workspace do
+		if listHas(S.fakeWords, a.Name) then return true end
+		a = a.Parent
+	end
+	return false
+end
+
 local CAT_ICON = { entity = "☠ ", door = "🚪 ", hide = "🗄 ", item = "★ ", chest = "📦 " }
 
 local function makeHl(inst, color)
@@ -835,8 +846,10 @@ local function trackEntity(inst, silent)
 
 	local color = cat == "entity" and (danger and T.bad or T.orange)
 		or cat == "door" and T.info or cat == "hide" and T.ok or cat == "chest" and T.purple or T.warn
-	local o = { part = part, cat = cat, color = color }
-	local shown = cat == "door" and "Kapı" or inst.Name
+	local fake = cat == "door" and isFakeDoor(inst)
+	if fake then color = T.bad end
+	local o = { part = part, cat = cat, color = color, fake = fake }
+	local shown = cat == "door" and (fake and "Sahte kapı" or "Kapı") or inst.Name
 	if #shown > 18 then shown = shown:sub(1, 16) .. "…" end
 	o.text = (danger and "☠ " or CAT_ICON[cat]) .. shown
 	ents[inst] = o
@@ -939,8 +952,9 @@ local function updateEntities()
 				local dist = (o.part.Position - myRoot.Position).Magnitude
 				o.dist = dist
 				if dist <= limitFor(o.cat) then
-					local l = byCat[o.cat]
-					if not l then l = {}; byCat[o.cat] = l end
+					local key = o.fake and "doorFake" or o.cat
+					local l = byCat[key]
+					if not l then l = {}; byCat[key] = l end
 					l[#l + 1] = o
 				end
 			end
@@ -1381,6 +1395,7 @@ local pPlayer = createTab("Oyuncu", "👤")
 local pMove = createTab("Hareket", "🏃")
 local pTp = createTab("Işınlan", "📍")
 local pItem = createTab("Eşya", "🎒")
+local pDoor = createTab("Kapılar", "🚪")
 local pDepo = createTab("Depo", "📦")
 local pLog = createTab("Sunucu", "📡", true)
 local pVis = createTab("Görsel", "👁")
@@ -1589,6 +1604,112 @@ do
 		}, rw)
 		miniBtn(rw, "Git", -118, function() teleportTo(cf) end)
 		miniBtn(rw, "Sil", -60, function() rw:Destroy() end)
+	end)
+end
+
+-- KAPILAR: gercek / sahte ayri listelenir (isimler ve yollar workspace'teki gibi)
+do
+	local filter, sig = "", ""
+	addSection(pDoor, "Kapı listesi (workspace'teki adlarıyla)")
+	addTextBox(pDoor, "Ara:", "", function(t) filter = t; sig = "" end)
+	addTextBox(pDoor, "Sahte kelimeler:", S.fakeWords, function(t)
+		S.fakeWords = t
+		clearEntities()
+		X.refreshEnt()
+		sig = ""
+	end, "fakeWords")
+	local info = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, TextWrapped = true, TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left, Text = "",
+	}, pDoor)
+
+	local function makeGroup(color)
+		local hdr = new("TextLabel", {
+			Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, TextColor3 = color, Font = Enum.Font.GothamBold,
+			TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, Text = "", NoBind = true,
+		}, pDoor)
+		local box = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pDoor)
+		new("UIListLayout", { Padding = UDim.new(0, 5) }, box)
+		return hdr, box
+	end
+	local realHdr, realBox = makeGroup(T.info)
+	local fakeHdr, fakeBox = makeGroup(T.bad)
+	local distLbls = {}
+
+	local function fill(box, list, color)
+		for _, c in ipairs(box:GetChildren()) do
+			if c:IsA("Frame") then c:Destroy() end
+		end
+		for i = 1, math.min(#list, 40) do
+			local e = list[i]
+			local r = row(box, 42)
+			new("Frame", { Size = UDim2.fromOffset(4, 30), Position = UDim2.fromOffset(6, 6), BackgroundColor3 = color, BorderSizePixel = 0, NoBind = true }, r)
+			new("TextLabel", {
+				Size = UDim2.new(1, -90, 0, 18), Position = UDim2.fromOffset(16, 3), BackgroundTransparency = 1, Text = e.inst.Name,
+				TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+			}, r)
+			distLbls[e.inst] = new("TextLabel", {
+				Size = UDim2.new(1, -90, 0, 14), Position = UDim2.fromOffset(16, 23), BackgroundTransparency = 1,
+				Text = e.inst:GetFullName(), TextColor3 = T.sub, Font = Enum.Font.Gotham, TextSize = 10,
+				TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+			}, r)
+			miniBtn(r, "Git", -60, function()
+				local o, root = ents[e.inst], getRoot()
+				if o and o.part and root then
+					local away = (root.Position - o.part.Position) * Vector3.new(1, 0, 1)
+					away = away.Magnitude > 0.1 and away.Unit or Vector3.zAxis
+					teleportTo(CFrame.new(o.part.Position + away * 4 + Vector3.new(0, 3, 0)))
+				end
+			end)
+		end
+	end
+
+	local function refresh()
+		if not S.entDoor then
+			info.Text = "  Kapı izleme kapalı (Görsel → Kapıları göster)"
+		else
+			info.Text = "  Kırmızı = adında sahte kelimesi geçenler. Tüm kapılar listelenir (ekrandaki etiketler 600 stud ile sınırlı)."
+		end
+		local root = getRoot()
+		local real, fake, f = {}, {}, filter:lower()
+		for inst, o in pairs(ents) do
+			if o.cat == "door" and o.part then
+				local full = inst:GetFullName()
+				if f == "" or full:lower():find(f, 1, true) then
+					table.insert(o.fake and fake or real, { inst = inst, d = root and (o.part.Position - root.Position).Magnitude or 0, full = full })
+				end
+			end
+		end
+		table.sort(real, function(a, b) return a.d < b.d end)
+		table.sort(fake, function(a, b) return a.d < b.d end)
+		local parts = {}
+		for i = 1, math.min(#real, 40) do parts[#parts + 1] = real[i].full end
+		parts[#parts + 1] = "||"
+		for i = 1, math.min(#fake, 40) do parts[#parts + 1] = fake[i].full end
+		local newSig = table.concat(parts, "|")
+		realHdr.Text = "  GERÇEK KAPILAR (" .. #real .. ")"
+		fakeHdr.Text = "  SAHTE KAPILAR (" .. #fake .. ")"
+		if newSig ~= sig then
+			sig = newSig
+			table.clear(distLbls)
+			fill(realBox, real, T.info)
+			fill(fakeBox, fake, T.bad)
+		end
+		if root then
+			for inst, lbl in pairs(distLbls) do
+				local o = ents[inst]
+				if o and o.part then
+					lbl.Text = math.floor((o.part.Position - root.Position).Magnitude + 0.5) .. " stud  •  " .. inst:GetFullName()
+				end
+			end
+		end
+	end
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			if main.Visible and pDoor.Visible then pcall(refresh) end
+		end
 	end)
 end
 
