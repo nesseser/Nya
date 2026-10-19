@@ -114,7 +114,7 @@ local S = {
 	respawnAtDeath = true,
 	fovOn = false, fov = 70,
 	fullbright = false,
-	espOn = false, espHighlight = true, espName = true, espDist = true, espTeam = false, espMax = 1500,
+	espOn = false, espHighlight = true, espName = true, espDist = true, espTeam = false, espMax = 600,
 	entOn = true, entHighlight = true,
 	entIgnore = "terrain,camera,baseplate,spawnlocation,handle,hitbox,hurtbox,frame,wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window,knob,hinge,doorway,jamb,trim,panel",
 	entMax = 600, doorMax = 300, entDoor = true, entDoorHl = true, entHide = true, entItem = false, entObjHl = false, objMax = 150,
@@ -136,8 +136,9 @@ local S = {
 	infStamina = false, fastPrompt = false, farPrompt = false, antiAfk = true,
 	staminaNames = "stamina,energy,sprint,mana,oxygen,breath,fuel,battery,flashlight",
 	infFood = false, foodNames = "food,hunger,hungry,satiety,thirst,water,drink,eat,starv,yemek,aclik,susuzluk,tokluk",
-	autoCollect = false, collectMode = "Yürü", collectSpeed = 60, collectDelay = 0.4, collectMax = 2000,
-	killNames ="kill,lava,death,damage,hurt,trap,spike,acid,laser,fire,poison,void,zap,electric",
+	autoCollect = false, collectMode = "Yürü", collectSpeed = 60, collectDelay = 0.4, collectMax = 600,
+	killNames = "kill,lava,death,damage,hurt,trap,spike,acid,laser,fire,poison,void,zap,electric,hitbox,hurtbox,attack,claw,bite,slash",
+	charNoTouch = false,
 	godMode = false, clockOn = false, clockTime = 14, noFog = false, crosshair = false,
 	zoomOn = false, zoom = 400, showStats = false,
 }
@@ -723,7 +724,7 @@ local function updateESP()
 			local root = char and char:FindFirstChild("HumanoidRootPart")
 			if char and root then
 				local dist = myRoot and (root.Position - myRoot.Position).Magnitude or 0
-				if dist > S.espMax then
+				if dist > math.min(S.espMax, 600) then
 					removeESP(plr)
 					continue
 				end
@@ -888,6 +889,7 @@ workspace.DescendantAdded:Connect(function(d)
 	end)
 end)
 
+local MAX_SHOW = 600 -- bundan uzaktaki hicbir sey gosterilmez / islenmez
 local MAX_DOOR_HL = 24 -- Roblox ayni anda ~31 highlight cizer; en yakin kapilara verilir
 local DEDUP = 8 -- ayni turden bu kadar yakin etiketlerden sadece biri gosterilir
 
@@ -914,7 +916,8 @@ local function dropBb(o)
 end
 
 local function limitFor(cat)
-	return cat == "entity" and S.entMax or cat == "door" and S.doorMax or S.objMax
+	local lim = cat == "entity" and S.entMax or cat == "door" and S.doorMax or S.objMax
+	return math.min(lim, MAX_SHOW)
 end
 
 local function updateEntities()
@@ -1153,7 +1156,7 @@ do
 				if o.cat == "entity" and (o.dist or 1e9) < 40 then nearEnt = true; break end
 			end
 		end
-		if nearEnt then
+		if nearEnt or S.charNoTouch then
 			eachPart(c, function(p)
 				if p.CanTouch then
 					charOrig[p] = true
@@ -1434,6 +1437,10 @@ addToggle(pMove, "Öldüren blokların dokunması kapalı", true, function(v)
 	X.refreshKill()
 end, "noTouch")
 addTextBox(pMove, "Kill blok:", S.killNames, function(t) S.killNames = t; X.refreshKill() end, "killNames")
+addToggle(pMove, "Karakter hitbox'ı kapalı (hiçbir şey dokunamaz)", false, function(v)
+	S.charNoTouch = v
+	if not v then X.restoreEntDmg() end
+end, "charNoTouch")
 addSection(pMove, "Tıkla ışınlan")
 addToggle(pMove, "Click TP (CTRL + tıkla)", false, function(v) S.clickTP = v end, "clickTP")
 
@@ -1522,6 +1529,7 @@ end
 
 -- ESYA LISTESI + OTOMATIK TOPLAMA
 do
+	local PathfindingService = game:GetService("PathfindingService")
 	local tried = {}
 	local running = false
 
@@ -1535,7 +1543,7 @@ do
 			if (o.cat == "item" or (o.cat == "chest" and S.collectChest)) and o.part and o.part:IsDescendantOf(workspace)
 				and (not tried[inst] or os.clock() - tried[inst] > 30) then
 				local d = (itemPos(o) - root.Position).Magnitude
-				if d <= S.collectMax and (not bd or d < bd) then best, bd = inst, d end
+				if d <= math.min(S.collectMax, 600) and (not bd or d < bd) then best, bd = inst, d end
 			end
 		end
 		return best
@@ -1548,17 +1556,40 @@ do
 			teleportTo(CFrame.new(pos))
 			return true
 		end
-		while S.autoCollect or S.collectManual do
-			local root = getRoot()
-			if not root then return false end
-			local delta = pos - root.Position
-			local dist = delta.Magnitude
-			if dist < 3 then return true end
-			local dt = RunService.Heartbeat:Wait()
-			root.CFrame = root.CFrame + delta.Unit * math.min(dist, S.collectSpeed * dt)
-			root.AssemblyLinearVelocity = Vector3.zero
+		-- dogal yuruyus: yol bul + Humanoid:MoveTo (fizik / anti-cheat ile kavga etmez)
+		local function active() return S.autoCollect or S.collectManual end
+		local function dist2()
+			local r = getRoot()
+			return r and (r.Position - pos).Magnitude or math.huge
 		end
-		return false
+		local hum = getHum()
+		if not hum then return false end
+		local oldWS = hum.WalkSpeed
+		if not S.speedOn then hum.WalkSpeed = S.collectSpeed end
+		local path = PathfindingService:CreatePath({ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true })
+		local root = getRoot()
+		local ok = root and pcall(function() path:ComputeAsync(root.Position, pos) end)
+		if ok and path.Status == Enum.PathStatus.Success then
+			for _, wp in ipairs(path:GetWaypoints()) do
+				if not active() or dist2() < 5 then break end
+				if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+				hum:MoveTo(wp.Position)
+				local t0 = os.clock()
+				local r
+				repeat
+					task.wait(0.05)
+					r = getRoot()
+				until not active() or not r or (r.Position - wp.Position).Magnitude < 4 or os.clock() - t0 > 2.5
+			end
+		end
+		-- yol bulunamadiysa dogrudan yuru
+		local t1 = os.clock()
+		while active() and dist2() > 4 and os.clock() - t1 < 5 do
+			hum:MoveTo(pos)
+			task.wait(0.1)
+		end
+		if not S.speedOn and hum.Parent then hum.WalkSpeed = oldWS end
+		return dist2() <= 8
 	end
 
 	local function pickup(inst, o)
@@ -1590,7 +1621,15 @@ do
 		if not o or not o.part then return end
 		tried[inst] = os.clock()
 		S.collectManual = true
-		if moveTo(itemPos(o)) then pickup(inst, o) end
+		if moveTo(itemPos(o)) then
+			pickup(inst, o)
+			if not inst:FindFirstChildWhichIsA("ProximityPrompt", true) and not inst:FindFirstChildWhichIsA("ClickDetector", true)
+				and typeof(firetouchinterest) ~= "function" then
+				notify("'" .. inst.Name .. "' için prompt / ClickDetector yok (dokunmayla toplanıyor olabilir)", "warn")
+			end
+		else
+			notify("'" .. inst.Name .. "' konumuna ulaşılamadı", "warn")
+		end
 		S.collectManual = false
 	end
 
@@ -1771,9 +1810,9 @@ do
 		setMode(S.collectMode)
 		registry.collectMode = { default = "Yürü", cb = function() end, get = function() return S.collectMode end, set = setMode }
 	end
-	addSlider(pItem, "Yürüme hızı (stud/sn)", 10, 300, S.collectSpeed, function(v) S.collectSpeed = v end, 5, "collectSpeed")
+	addSlider(pItem, "Yürüme hızı (WalkSpeed)", 10, 300, S.collectSpeed, function(v) S.collectSpeed = v end, 5, "collectSpeed")
 	addSlider(pItem, "Eşyalar arası bekleme (sn)", 0, 3, S.collectDelay, function(v) S.collectDelay = v end, 0.1, "collectDelay")
-	addSlider(pItem, "Max toplama mesafesi", 50, 5000, S.collectMax, function(v) S.collectMax = v end, 50, "collectMax")
+	addSlider(pItem, "Max toplama mesafesi", 50, 600, S.collectMax, function(v) S.collectMax = v end, 50, "collectMax")
 
 	addSection(pItem, "Yakındakileri sürekli topla (ışınlanmadan)")
 	addToggle(pItem, "Sürekli otomatik topla (çekmece / eşya)", false, function(v) S.nearAuto = v end, "nearAuto")
@@ -1804,7 +1843,8 @@ do
 		local arr = {}
 		for inst, o in pairs(ents) do
 			if (o.cat == "item" or o.cat == "chest") and o.part then
-				table.insert(arr, { inst = inst, d = root and (itemPos(o) - root.Position).Magnitude or 0 })
+				local d = root and (itemPos(o) - root.Position).Magnitude or 0
+				if d <= 600 then table.insert(arr, { inst = inst, d = d }) end
 			end
 		end
 		table.sort(arr, function(a, b) return a.d < b.d end)
@@ -1910,7 +1950,7 @@ addToggle(pVis, "Highlight", true, function(v) S.espHighlight = v end, "espHighl
 addToggle(pVis, "İsim", true, function(v) S.espName = v end, "espName")
 addToggle(pVis, "Mesafe (isim altında)", true, function(v) S.espDist = v end, "espDist")
 addToggle(pVis, "Takım rengi", false, function(v) S.espTeam = v end, "espTeam")
-addSlider(pVis, "ESP max mesafe (stud)", 50, 20000, S.espMax, function(v) S.espMax = v end, 50, "espMax")
+addSlider(pVis, "ESP max mesafe (stud)", 50, 600, S.espMax, function(v) S.espMax = v end, 50, "espMax")
 addSection(pVis, "Akıllı izleyici (varlık / kapı / dolap)")
 addToggle(pVis, "İzleyici aktif", true, function(v)
 	S.entOn = v
@@ -1922,9 +1962,9 @@ addToggle(pVis, "Kapıları göster", true, function(v) S.entDoor = v; X.refresh
 addToggle(pVis, "Kapı highlight (en yakın 24)", true, function(v) S.entDoorHl = v end, "entDoorHl")
 addToggle(pVis, "Dolap / saklanma yerlerini göster", true, function(v) S.entHide = v; X.refreshEnt() end, "entHide")
 addToggle(pVis, "Kapı/dolap highlight (en fazla ~31)", false, function(v) S.entObjHl = v end, "entObjHl")
-addSlider(pVis, "Varlık max mesafe", 50, 3000, S.entMax, function(v) S.entMax = v end, 50, "entMax")
-addSlider(pVis, "Kapı max mesafe", 20, 2000, S.doorMax, function(v) S.doorMax = v end, 10, "doorMax")
-addSlider(pVis, "Dolap/eşya max mesafe", 20, 1000, S.objMax, function(v) S.objMax = v end, 10, "objMax")
+addSlider(pVis, "Varlık max mesafe", 50, 600, S.entMax, function(v) S.entMax = v end, 50, "entMax")
+addSlider(pVis, "Kapı max mesafe", 20, 600, S.doorMax, function(v) S.doorMax = v end, 10, "doorMax")
+addSlider(pVis, "Dolap/eşya max mesafe", 20, 600, S.objMax, function(v) S.objMax = v end, 10, "objMax")
 addToggle(pVis, "Sesli uyarı (yeni varlık)", true, function(v) S.soundOn = v end, "soundOn")
 addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t; X.refreshEnt() end, "entDanger")
 addTextBox(pVis, "Kapı:", S.entDoors, function(t) S.entDoors = t; X.refreshEnt() end, "entDoors")
@@ -2022,7 +2062,7 @@ addSection(pSet, "Ayarları kaydet")
 do
 	local FILE = "HunterPanel_settings.json"
 	local canFile = typeof(writefile) == "function" and typeof(readfile) == "function"
-	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true, autoCollect = true, entIgnore = true }
+	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true, autoCollect = true, entIgnore = true, killNames = true }
 
 	local function encode()
 		local data = { theme = X.themeIndex, v = {} }
