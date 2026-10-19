@@ -116,7 +116,9 @@ local S = {
 	fullbright = false,
 	espOn = false, espHighlight = true, espName = true, espDist = true, espTeam = false, espMax = 5000,
 	entOn = true, entHighlight = true,
-	entIgnore = "terrain,camera,baseplate,spawnlocation,handle,hitbox,hurtbox",
+	entIgnore = "terrain,camera,baseplate,spawnlocation,handle,hitbox,hurtbox,frame,wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window",
+	entDoor = true, entHide = true, entItem = false, entObjHl = false, objMax = 150,
+	entDoors = "door,kapi", entHides = "wardrobe,closet,locker,cabinet,dolap,hide,bed", entItems = "key,coin,item,pickup,chest",
 	entDanger = "rush,ambush,seek,figure,screech,eyes,halt,jeff,boss,monster,enemy,zombie,killer",
 	hbViz = false,
 	logClient = false,
@@ -726,53 +728,101 @@ end
 local function untrackEntity(inst)
 	local o = ents[inst]
 	if o then
-		o.hl:Destroy()
+		if o.hl then o.hl:Destroy() end
 		if o.bb then o.bb:Destroy() end
 		ents[inst] = nil
 	end
 end
 local function clearEntities() for i in pairs(ents) do untrackEntity(i) end end
 
-local function trackEntity(inst)
-	if ents[inst] or not inst.Parent then return end
-	if not (inst:IsA("Model") or inst:IsA("BasePart")) or inst:IsA("Terrain") then return end
-	if not (inst.Parent == workspace or inst.Parent:IsA("Folder")) then return end
-	if inst:IsA("Model") and Players:GetPlayerFromCharacter(inst) then return end
-	if listHas(S.entIgnore, inst.Name) then return end
-
-	local danger = listHas(S.entDanger, inst.Name)
-	local mainColor = danger and T.bad or T.orange
-	local part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart", true)
-	local o = { part = part }
-	o.hl = new("Highlight", {
-		Adornee = inst, FillColor = mainColor, FillTransparency = 0.4, OutlineColor = Color3.fromRGB(255, 255, 0),
-		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Enabled = S.entHighlight, NoBind = true,
-	}, gui)
-	if part then
-		o.bb = new("BillboardGui", {
-			Adornee = part, Size = UDim2.fromOffset(200, 44), StudsOffset = Vector3.new(0, 4, 0), AlwaysOnTop = true,
-		}, gui)
-		new("TextLabel", {
-			Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, Text = (danger and "☠ " or "⚠ ") .. inst.Name,
-			TextColor3 = mainColor, TextStrokeTransparency = 0, Font = Enum.Font.GothamBold, TextScaled = true, NoBind = true,
-		}, o.bb)
-		o.distLbl = new("TextLabel", {
-			Size = UDim2.new(1, 0, 0.45, 0), Position = UDim2.new(0, 0, 0.55, 0), BackgroundTransparency = 1,
-			TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0, Font = Enum.Font.Gotham, TextScaled = true, NoBind = true,
-		}, o.bb)
-	end
-	ents[inst] = o
-	local myRoot = getRoot()
-	local dist = myRoot and math.floor((entPos(inst) - myRoot.Position).Magnitude + 0.5) or 0
-	notify((danger and "☠ TEHLİKE: " or "⚠ ") .. inst.Name .. " spawn oldu (" .. dist .. " stud)", danger and "bad" or "entity")
-	addLog("entity", inst:GetFullName() .. " spawn oldu (" .. dist .. " stud)" .. (danger and "  [TEHLIKE]" or ""))
-	playAlert(danger)
+-- hangi tur? entity = humanoid / tehlikeli isim, door, hide (dolap vb.), item
+local function classify(inst)
+	if not inst:IsA("Model") then return nil end
+	if Players:GetPlayerFromCharacter(inst) then return nil end
+	local name = inst.Name
+	if listHas(S.entIgnore, name) then return nil end
+	if inst:FindFirstChildOfClass("Humanoid") then return "entity", listHas(S.entDanger, name) end
+	if listHas(S.entDanger, name) then return "entity", true end
+	if S.entDoor and listHas(S.entDoors, name) then return "door" end
+	if S.entHide and listHas(S.entHides, name) then return "hide" end
+	if S.entItem and listHas(S.entItems, name) then return "item" end
+	return nil
 end
 
+local CAT_ICON = { entity = "☠ ", door = "🚪 ", hide = "🗄 ", item = "★ " }
+
+local function makeHl(inst, color)
+	return new("Highlight", {
+		Adornee = inst, FillColor = color, FillTransparency = 0.55, OutlineColor = color,
+		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, NoBind = true,
+	}, gui)
+end
+
+local function trackEntity(inst, silent)
+	if ents[inst] or not inst.Parent or not S.entOn then return end
+	local cat, danger = classify(inst)
+	if not cat then return end
+	-- zaten izlenen bir modelin icindeyse atla (dolabin kapagi gibi)
+	local a = inst.Parent
+	while a and a ~= workspace do
+		if ents[a] then return end
+		a = a.Parent
+	end
+	local part = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+	if not part then return end
+
+	local color = cat == "entity" and (danger and T.bad or T.orange)
+		or cat == "door" and T.info or cat == "hide" and T.ok or T.warn
+	local o = { part = part, cat = cat, color = color }
+	o.bb = new("BillboardGui", {
+		Adornee = part, Size = UDim2.fromOffset(180, 40), StudsOffset = Vector3.new(0, 3, 0), AlwaysOnTop = true,
+	}, gui)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.55, 0), BackgroundTransparency = 1, Text = (danger and "☠ " or CAT_ICON[cat]) .. inst.Name,
+		TextColor3 = color, TextStrokeTransparency = 0, Font = Enum.Font.GothamBold, TextScaled = true, NoBind = true,
+	}, o.bb)
+	o.distLbl = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0.45, 0), Position = UDim2.new(0, 0, 0.55, 0), BackgroundTransparency = 1,
+		TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0, Font = Enum.Font.Gotham, TextScaled = true, NoBind = true,
+	}, o.bb)
+	ents[inst] = o
+
+	if cat == "entity" and not silent then
+		local myRoot = getRoot()
+		local dist = myRoot and math.floor((part.Position - myRoot.Position).Magnitude + 0.5) or 0
+		notify((danger and "☠ TEHLİKE: " or "⚠ ") .. inst.Name .. " spawn oldu (" .. dist .. " stud)", danger and "bad" or "entity")
+		addLog("entity", inst:GetFullName() .. " spawn oldu (" .. dist .. " stud)" .. (danger and "  [TEHLIKE]" or ""))
+		playAlert(danger)
+	end
+end
+
+-- listeler / anahtarlar degisince: uymayanlari sil, mevcut haritayi yeniden tara
+local scanId = 0
+function X.refreshEnt()
+	scanId += 1
+	local id = scanId
+	task.delay(0.3, function()
+		if id ~= scanId then return end
+		for inst in pairs(ents) do
+			if not S.entOn or not classify(inst) then untrackEntity(inst) end
+		end
+		if not S.entOn then return end
+		local n = 0
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if id ~= scanId then return end
+			if d:IsA("Model") then trackEntity(d, true) end
+			n += 1
+			if n % 1500 == 0 then task.wait() end
+		end
+	end)
+end
+X.refreshEnt()
+
 workspace.DescendantAdded:Connect(function(d)
-	if not S.entOn or os.clock() - startTime < 4 then return end
-	task.delay(0.15, function()
-		if d.Parent then trackEntity(d) end
+	if not S.entOn or not d:IsA("Model") then return end
+	local silent = os.clock() - startTime < 4
+	task.delay(0.2, function()
+		if d.Parent then trackEntity(d, silent) end
 	end)
 end)
 
@@ -782,13 +832,23 @@ local function updateEntities()
 		if not inst:IsDescendantOf(workspace) then
 			untrackEntity(inst)
 		else
-			o.hl.Enabled = S.entHighlight
-			if o.distLbl and myRoot then
-				o.distLbl.Text = string.format("%d stud", math.floor((entPos(inst) - myRoot.Position).Magnitude + 0.5))
-			end
-			if o.bb and (not o.part or not o.part:IsDescendantOf(workspace)) then
-				o.part = inst:IsA("BasePart") and inst or inst:FindFirstChildWhichIsA("BasePart", true)
+			if not o.part:IsDescendantOf(workspace) then
+				o.part = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
 				o.bb.Adornee = o.part
+			end
+			if o.part then
+				local dist = myRoot and (o.part.Position - myRoot.Position).Magnitude or 0
+				local isEnt = o.cat == "entity"
+				local visible = isEnt or dist <= S.objMax
+				o.bb.Enabled = visible
+				if visible then o.distLbl.Text = string.format("%d stud", math.floor(dist + 0.5)) end
+				local wantHl = visible and (isEnt and S.entHighlight or (not isEnt and S.entObjHl))
+				if wantHl and not o.hl then
+					o.hl = makeHl(inst, o.color)
+				elseif not wantHl and o.hl then
+					o.hl:Destroy()
+					o.hl = nil
+				end
 			end
 		end
 	end
@@ -1131,15 +1191,24 @@ addToggle(pVis, "İsim", true, function(v) S.espName = v end, "espName")
 addToggle(pVis, "Mesafe (isim altında)", true, function(v) S.espDist = v end, "espDist")
 addToggle(pVis, "Takım rengi", false, function(v) S.espTeam = v end, "espTeam")
 addSlider(pVis, "ESP max mesafe (stud)", 50, 20000, S.espMax, function(v) S.espMax = v end, 50, "espMax")
-addSection(pVis, "Spawn izleyici + sesli uyarı")
-addToggle(pVis, "Yeni çıkan şeyleri göster", true, function(v)
+addSection(pVis, "Akıllı izleyici (varlık / kapı / dolap)")
+addToggle(pVis, "İzleyici aktif", true, function(v)
 	S.entOn = v
 	if not v then clearEntities() end
+	X.refreshEnt()
 end, "entOn")
-addToggle(pVis, "Highlight", true, function(v) S.entHighlight = v end, "entHighlight")
-addToggle(pVis, "Sesli uyarı", true, function(v) S.soundOn = v end, "soundOn")
-addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t end, "entDanger")
-addTextBox(pVis, "Yoksay:", S.entIgnore, function(t) S.entIgnore = t end, "entIgnore")
+addToggle(pVis, "Varlık highlight (humanoid / tehlikeli)", true, function(v) S.entHighlight = v end, "entHighlight")
+addToggle(pVis, "Kapıları göster", true, function(v) S.entDoor = v; X.refreshEnt() end, "entDoor")
+addToggle(pVis, "Dolap / saklanma yerlerini göster", true, function(v) S.entHide = v; X.refreshEnt() end, "entHide")
+addToggle(pVis, "Eşyaları göster", false, function(v) S.entItem = v; X.refreshEnt() end, "entItem")
+addToggle(pVis, "Kapı/dolap highlight (en fazla ~31)", false, function(v) S.entObjHl = v end, "entObjHl")
+addSlider(pVis, "Kapı/dolap/eşya max mesafe", 20, 1000, S.objMax, function(v) S.objMax = v end, 10, "objMax")
+addToggle(pVis, "Sesli uyarı (yeni varlık)", true, function(v) S.soundOn = v end, "soundOn")
+addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t; X.refreshEnt() end, "entDanger")
+addTextBox(pVis, "Kapı:", S.entDoors, function(t) S.entDoors = t; X.refreshEnt() end, "entDoors")
+addTextBox(pVis, "Dolap:", S.entHides, function(t) S.entHides = t; X.refreshEnt() end, "entHides")
+addTextBox(pVis, "Eşya:", S.entItems, function(t) S.entItems = t; X.refreshEnt() end, "entItems")
+addTextBox(pVis, "Yoksay:", S.entIgnore, function(t) S.entIgnore = t; X.refreshEnt() end, "entIgnore")
 addButton(pVis, "Takip edilenleri temizle", clearEntities)
 addSection(pVis, "Debug")
 addToggle(pVis, "Hitbox'ları göster", false, function(v)
