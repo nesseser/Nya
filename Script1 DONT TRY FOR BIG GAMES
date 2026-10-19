@@ -126,10 +126,13 @@ local S = {
 	bgId = BG_IMAGE_ID, bgTrans = 0.35,
 	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
 	antiSlip = false, noTouch = true,
+	nearAuto = false, nearItems = true, nearDoors = false, nearInterval = 0.5,
+	lootWords = "pick,take,loot,collect,search,drawer,chest,crate,safe,item,key,coin,grab,cekmece,sandik,topla,cabinet,dresser,desk",
+	nearSkip = "hide,enter,exit,sit,seat,drive,ride,leave,lever,switch,button,sleep,bed",
 	rQuick = true, rItems = true, rDoors = true, rReturn = true, rRange = 40, rDelay = 0.1,
 	autoHeal = false, healInterval = 0.1,
 	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
-	noEntDmg = false, flee = false, fleeDist = 25,
+	noEntDmg = true, flee = false, fleeDist = 25,
 	infStamina = false, fastPrompt = false, farPrompt = false, antiAfk = true,
 	staminaNames = "stamina,energy,sprint,mana,oxygen,breath,fuel,battery,flashlight",
 	infFood = false, foodNames = "food,hunger,hungry,satiety,thirst,water,drink,eat,starv,yemek,aclik,susuzluk,tokluk",
@@ -315,7 +318,8 @@ new("UIListLayout", { VerticalAlignment = Enum.VerticalAlignment.Bottom, Padding
 -- ayni anahtarla tekrar gelen bildirimler tek satirda birlesir: "... x16"
 local notifyActive = {}
 local function notify(text, kind, key, shortText)
-	local act = key and notifyActive[key]
+	key = key or text -- ayni metin = ayni bildirim
+	local act = notifyActive[key]
 	if act and act.f.Parent and os.clock() - act.t < 4 then
 		act.n += 1
 		act.t = os.clock()
@@ -338,7 +342,13 @@ local function notify(text, kind, key, shortText)
 	tween(lbl, 0.2, { TextTransparency = 0 })
 	tween(st, 0.2, { Transparency = 0 })
 	local entry = { f = f, lbl = lbl, n = 1, t = os.clock() }
-	if key then notifyActive[key] = entry end
+	notifyActive[key] = entry
+	-- ekranda en fazla 6 bildirim: fazlasinda en eskisi silinir
+	local frames = {}
+	for _, c in ipairs(notifyHolder:GetChildren()) do
+		if c:IsA("Frame") then table.insert(frames, c) end
+	end
+	if #frames > 6 then frames[1]:Destroy() end
 	local function fade()
 		if not f.Parent then return end
 		local left = 4 - (os.clock() - entry.t)
@@ -1045,7 +1055,7 @@ do
 
 	-- sadece oldurucu bloklarin dokunmasini kapat (kapi vb. etkilenmez)
 	local killOrig = {}
-	local dmgOrig, lastFlee = {}, 0
+	local dmgOrig, charOrig, lastFlee = {}, {}, 0
 	local function isKill(p)
 		if not p:IsA("BasePart") then return false end
 		if listHas(S.killNames, p.Name) then return true end
@@ -1086,6 +1096,10 @@ do
 			if p.Parent then p.CanTouch = true end
 		end
 		table.clear(dmgOrig)
+		for p in pairs(charOrig) do
+			if p.Parent then p.CanTouch = true end
+		end
+		table.clear(charOrig)
 	end
 
 	function X.restoreSlip()
@@ -1131,6 +1145,26 @@ do
 					end
 				end
 			end
+		end
+		-- yaratik yakindaysa KARAKTERIN dokunmasini da kapat (uzaklasinca geri acilir, kapilar bozulmaz)
+		local nearEnt = false
+		if S.noEntDmg then
+			for _, o in pairs(ents) do
+				if o.cat == "entity" and (o.dist or 1e9) < 40 then nearEnt = true; break end
+			end
+		end
+		if nearEnt then
+			eachPart(c, function(p)
+				if p.CanTouch then
+					charOrig[p] = true
+					p.CanTouch = false
+				end
+			end)
+		elseif next(charOrig) then
+			for p in pairs(charOrig) do
+				if p.Parent then p.CanTouch = true end
+			end
+			table.clear(charOrig)
 		end
 		-- yaratik cok yaklasirsa guvenli noktaya kac
 		if S.flee and os.clock() - lastFlee > 2 then
@@ -1350,7 +1384,7 @@ task.spawn(function()
 	end
 end)
 addSection(pPlayer, "Yaratık koruması")
-addToggle(pPlayer, "Yaratık hasarını engelle (dokunma kapat)", false, function(v)
+addToggle(pPlayer, "Yaratık hasarını engelle (dokunma kapat)", true, function(v)
 	S.noEntDmg = v
 	if not v then X.restoreEntDmg() end
 end, "noEntDmg")
@@ -1560,6 +1594,26 @@ do
 		S.collectManual = false
 	end
 
+	-- haritadaki tum ProximityPrompt'lar (bir kez taranir, sonra olay ile guncellenir)
+	local prompts = {}
+	task.spawn(function()
+		local n = 0
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if d:IsA("ProximityPrompt") then prompts[d] = true end
+			n += 1
+			if n % 2000 == 0 then task.wait() end
+		end
+	end)
+	workspace.DescendantAdded:Connect(function(d)
+		if d:IsA("ProximityPrompt") then prompts[d] = true end
+	end)
+	workspace.DescendantRemoving:Connect(function(d) prompts[d] = nil end)
+	local function promptPart(p)
+		local part = p.Parent
+		if part and part:IsA("Attachment") then part = part.Parent end
+		if part and part:IsA("BasePart") then return part end
+	end
+
 	-- R: yakindaki tum prompt'lari (cekmece, esya, anahtarli kapi...) hizlica tetikle
 	local function firePrompt(p)
 		if typeof(fireproximityprompt) == "function" then
@@ -1589,11 +1643,10 @@ do
 		task.spawn(function()
 			local origin = root.CFrame
 			local targets = {}
-			for _, d in ipairs(workspace:GetDescendants()) do
-				if d:IsA("ProximityPrompt") and d.Enabled then
-					local part = d.Parent
-					if part and part:IsA("Attachment") then part = part.Parent end
-					if part and part:IsA("BasePart") then
+			for d in pairs(prompts) do
+				if d.Parent and d.Enabled then
+					local part = promptPart(d)
+					if part then
 						local dist = (part.Position - origin.Position).Magnitude
 						if dist <= S.rRange then
 							local isDoor = underDoor(part)
@@ -1624,6 +1677,39 @@ do
 			quickBusy = false
 		end)
 	end
+
+	-- surekli mod: ISINLANMADAN, sadece prompt menzilindeki esya/cekmeceleri tetikler
+	local function isLoot(p, part)
+		local m = part:FindFirstAncestorOfClass("Model")
+		local text = p.ActionText .. " " .. p.ObjectText .. " " .. part.Name .. " " .. (m and m.Name or "")
+		if listHas(S.nearSkip, text) then return false end
+		return listHas(S.lootWords, text) or listHas(S.entItems, text) or listHas(S.entChests, text)
+	end
+	task.spawn(function()
+		local cool = setmetatable({}, { __mode = "k" })
+		while true do
+			task.wait(S.nearInterval)
+			local root = S.nearAuto and not quickBusy and getRoot()
+			if root then
+				local char = getChar()
+				for p in pairs(prompts) do
+					if not S.nearAuto then break end
+					local part = p.Parent and p.Enabled and promptPart(p)
+					if part and (not cool[p] or os.clock() - cool[p] > 3)
+						and not (char and part:IsDescendantOf(char)) and not p:FindFirstAncestorOfClass("Tool") then
+						if (part.Position - root.Position).Magnitude <= p.MaxActivationDistance then
+							local isDoor = underDoor(part)
+							if (isDoor and S.nearDoors) or (not isDoor and S.nearItems and isLoot(p, part)) then
+								cool[p] = os.clock()
+								pcall(firePrompt, p)
+								task.wait(S.rDelay)
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
 
 	function X.startCollect()
 		if running then return end
@@ -1689,6 +1775,13 @@ do
 	addSlider(pItem, "Eşyalar arası bekleme (sn)", 0, 3, S.collectDelay, function(v) S.collectDelay = v end, 0.1, "collectDelay")
 	addSlider(pItem, "Max toplama mesafesi", 50, 5000, S.collectMax, function(v) S.collectMax = v end, 50, "collectMax")
 
+	addSection(pItem, "Yakındakileri sürekli topla (ışınlanmadan)")
+	addToggle(pItem, "Sürekli otomatik topla (çekmece / eşya)", false, function(v) S.nearAuto = v end, "nearAuto")
+	addToggle(pItem, "Eşya / çekmeceleri topla", true, function(v) S.nearItems = v end, "nearItems")
+	addToggle(pItem, "Kapıları da aç", false, function(v) S.nearDoors = v end, "nearDoors")
+	addSlider(pItem, "Tarama aralığı (sn)", 0.2, 3, S.nearInterval, function(v) S.nearInterval = v end, 0.1, "nearInterval")
+	addTextBox(pItem, "Toplanır:", S.lootWords, function(t) S.lootWords = t end, "lootWords")
+	addTextBox(pItem, "Atla:", S.nearSkip, function(t) S.nearSkip = t end, "nearSkip")
 	addSection(pItem, "R tuşu: hızlı topla / aç")
 	addToggle(pItem, "R ile yakındakileri tetikle", true, function(v) S.rQuick = v end, "rQuick")
 	addToggle(pItem, "Çekmece / eşya / sandık", true, function(v) S.rItems = v end, "rItems")
