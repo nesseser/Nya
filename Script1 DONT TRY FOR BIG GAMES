@@ -1,4 +1,4 @@
---// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
+<roblox version="4"><Item class="LocalScript" referent="RBX0"><Properties><string name="Name">HunterPanel</string><bool name="Disabled">false</bool><token name="RunContext">0</token><ProtectedString name="Source"><![CDATA[--// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -155,7 +155,7 @@ end
 -- ANA PENCERE
 ------------------------------------------------------------------
 local gui = new("ScreenGui", {
-	Name = "HunterPanel", ResetOnSpawn = false, DisplayOrder = 999,
+	Name = "HunterPanel", ResetOnSpawn = false, DisplayOrder = 999, IgnoreGuiInset = true,
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 }, player:WaitForChild("PlayerGui"))
 
@@ -245,6 +245,20 @@ floatBtn.MouseButton1Click:Connect(function() main.Visible = not main.Visible en
 local modalBtn = new("TextButton", {
 	Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, Text = "", Modal = true, NoBind = true,
 }, gui)
+-- panel aciksa imlec noktasi (birinci sahiste sistem imleci gorunmez)
+local cursorDot = new("Frame", {
+	Size = UDim2.fromOffset(8, 8), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Color3.new(1, 1, 1),
+	BorderSizePixel = 0, ZIndex = 1000, Visible = false, NoBind = true,
+}, gui)
+new("UICorner", { CornerRadius = UDim.new(1, 0) }, cursorDot)
+new("UIStroke", { Color = Color3.new(0, 0, 0), Thickness = 1.5, NoBind = true }, cursorDot)
+RunService.RenderStepped:Connect(function()
+	cursorDot.Visible = main.Visible
+	if main.Visible then
+		local p = UserInputService:GetMouseLocation()
+		cursorDot.Position = UDim2.fromOffset(p.X, p.Y)
+	end
+end)
 local function syncMouse() modalBtn.Modal = main.Visible end
 main:GetPropertyChangedSignal("Visible"):Connect(syncMouse)
 syncMouse()
@@ -1494,3 +1508,4 @@ if player.Character then task.spawn(hookDeath, player.Character) end
 setBgImage()
 notify(PANEL_NAME .. " yüklendi  •  K ile aç/kapat", "ok")
 addLog("panel", PANEL_NAME .. " yüklendi")
+]]></ProtectedString></Properties></Item></roblox>
