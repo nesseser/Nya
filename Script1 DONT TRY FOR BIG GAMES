@@ -126,6 +126,7 @@ local S = {
 	bgId = BG_IMAGE_ID, bgTrans = 0.35,
 	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
 	antiSlip = false, noTouch = true,
+	rQuick = true, rItems = true, rDoors = true, rReturn = true, rRange = 40, rDelay = 0.1,
 	autoHeal = false, healInterval = 0.1,
 	entChest = false, collectChest = true, entChests = "chest,crate,sandik,drawer,safe,coffer,loot",
 	noEntDmg = false, flee = false, fleeDist = 25,
@@ -1559,6 +1560,71 @@ do
 		S.collectManual = false
 	end
 
+	-- R: yakindaki tum prompt'lari (cekmece, esya, anahtarli kapi...) hizlica tetikle
+	local function firePrompt(p)
+		if typeof(fireproximityprompt) == "function" then
+			fireproximityprompt(p)
+		else
+			local hold = p.HoldDuration
+			p.HoldDuration = 0
+			p:InputHoldBegin()
+			task.wait(0.05)
+			p:InputHoldEnd()
+			p.HoldDuration = hold
+		end
+	end
+	local function underDoor(inst)
+		local a = inst
+		while a and a ~= workspace do
+			if listHas(S.entDoors, a.Name) and not listHas("frame", a.Name) then return true end
+			a = a.Parent
+		end
+		return false
+	end
+	local quickBusy = false
+	function X.quick()
+		local root = getRoot()
+		if quickBusy or not root then return end
+		quickBusy = true
+		task.spawn(function()
+			local origin = root.CFrame
+			local targets = {}
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if d:IsA("ProximityPrompt") and d.Enabled then
+					local part = d.Parent
+					if part and part:IsA("Attachment") then part = part.Parent end
+					if part and part:IsA("BasePart") then
+						local dist = (part.Position - origin.Position).Magnitude
+						if dist <= S.rRange then
+							local isDoor = underDoor(part)
+							if (isDoor and S.rDoors) or (not isDoor and S.rItems) then
+								table.insert(targets, { p = d, part = part, dist = dist })
+							end
+						end
+					end
+				end
+			end
+			table.sort(targets, function(a, b) return a.dist < b.dist end)
+			local n = 0
+			for _, t in ipairs(targets) do
+				local r = getRoot()
+				if not r then break end
+				if t.part.Parent and t.p.Parent then
+					if (t.part.Position - r.Position).Magnitude > math.max(4, t.p.MaxActivationDistance * 0.7) then
+						teleportTo(CFrame.new(t.part.Position + Vector3.new(0, 3, 0)))
+						task.wait(0.05)
+					end
+					pcall(firePrompt, t.p)
+					n += 1
+					task.wait(S.rDelay)
+				end
+			end
+			if S.rReturn and getRoot() then teleportTo(origin) end
+			notify(n > 0 and ("R: " .. n .. " etkileşim yapıldı") or "R: yakında etkileşim yok", n > 0 and "ok" or "warn")
+			quickBusy = false
+		end)
+	end
+
 	function X.startCollect()
 		if running then return end
 		running = true
@@ -1622,6 +1688,14 @@ do
 	addSlider(pItem, "Yürüme hızı (stud/sn)", 10, 300, S.collectSpeed, function(v) S.collectSpeed = v end, 5, "collectSpeed")
 	addSlider(pItem, "Eşyalar arası bekleme (sn)", 0, 3, S.collectDelay, function(v) S.collectDelay = v end, 0.1, "collectDelay")
 	addSlider(pItem, "Max toplama mesafesi", 50, 5000, S.collectMax, function(v) S.collectMax = v end, 50, "collectMax")
+
+	addSection(pItem, "R tuşu: hızlı topla / aç")
+	addToggle(pItem, "R ile yakındakileri tetikle", true, function(v) S.rQuick = v end, "rQuick")
+	addToggle(pItem, "Çekmece / eşya / sandık", true, function(v) S.rItems = v end, "rItems")
+	addToggle(pItem, "Kapılar (anahtarlı dahil)", true, function(v) S.rDoors = v end, "rDoors")
+	addToggle(pItem, "İş bitince eski yere dön", true, function(v) S.rReturn = v end, "rReturn")
+	addSlider(pItem, "R menzili (stud)", 10, 200, S.rRange, function(v) S.rRange = v end, 5, "rRange")
+	addSlider(pItem, "İşlemler arası bekleme (sn)", 0, 1, S.rDelay, function(v) S.rDelay = v end, 0.05, "rDelay")
 
 	addSection(pItem, "Bulunan eşyalar")
 	local countLbl = new("TextLabel", {
@@ -1845,7 +1919,7 @@ addButton(pSet, "🚨  Tehlike uyarısını test et", function() playAlert(true,
 addSection(pSet, "Arayüz")
 addSlider(pSet, "Panel boyutu", 0.6, 1.4, uiScale.Scale, function(v) uiScale.Scale = v end, 0.05, "uiScale")
 addSection(pSet, "Kısayollar")
-for _, t in ipairs({ "K  →  Paneli aç/kapat", "F  →  Fly", "N  →  NoClip", "CTRL + tık  →  Click TP", "Space / Shift  →  Fly ve NoClip'te yukarı / aşağı" }) do
+for _, t in ipairs({ "K  →  Paneli aç/kapat", "F  →  Fly", "N  →  NoClip", "CTRL + tık  →  Click TP", "R  →  Yakındakileri hızlı topla / aç", "Space / Shift  →  Fly ve NoClip'te yukarı / aşağı" }) do
 	new("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Text = "  " .. t, TextColor3 = T.sub,
 		Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
@@ -2112,6 +2186,8 @@ UserInputService.InputBegan:Connect(function(input, gp)
 	elseif input.KeyCode == Enum.KeyCode.N then
 		S.noclip = not S.noclip
 		setNoclip(S.noclip)
+	elseif input.KeyCode == Enum.KeyCode.R and S.rQuick then
+		X.quick()
 	end
 end)
 
