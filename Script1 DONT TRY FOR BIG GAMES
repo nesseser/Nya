@@ -1,3 +1,4 @@
+
 --// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -116,8 +117,8 @@ local S = {
 	fullbright = false,
 	espOn = false, espHighlight = true, espName = true, espDist = true, espTeam = false, espMax = 5000,
 	entOn = true, entHighlight = true,
-	entIgnore = "terrain,camera,baseplate,spawnlocation,handle,hitbox,hurtbox,frame,wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window",
-	entDoor = true, entHide = true, entItem = false, entObjHl = false, objMax = 150,
+	entIgnore = "terrain,camera,baseplate,spawnlocation,handle,hitbox,hurtbox,frame,wall,floor,ceiling,rafter,pillar,strip,lightstand,chandelier,window,knob,hinge,doorway,jamb,trim,panel",
+	entDoor = true, entDoorHl = true, entHide = true, entItem = false, entObjHl = false, objMax = 150,
 	entDoors = "door,kapi", entHides = "wardrobe,closet,locker,cabinet,dolap,hide,bed", entItems = "key,coin,item,pickup,chest",
 	entDanger = "rush,ambush,seek,figure,screech,eyes,halt,jeff,boss,monster,enemy,zombie,killer",
 	hbViz = false,
@@ -737,9 +738,16 @@ local function clearEntities() for i in pairs(ents) do untrackEntity(i) end end
 
 -- hangi tur? entity = humanoid / tehlikeli isim, door, hide (dolap vb.), item
 local function classify(inst)
-	if not inst:IsA("Model") then return nil end
-	if Players:GetPlayerFromCharacter(inst) then return nil end
+	if inst:IsA("Terrain") then return nil end
 	local name = inst.Name
+	if not inst:IsA("Model") then
+		-- tek parca halindeki kapilar
+		if inst:IsA("BasePart") and S.entDoor and not listHas(S.entIgnore, name) and listHas(S.entDoors, name) then
+			return "door"
+		end
+		return nil
+	end
+	if Players:GetPlayerFromCharacter(inst) then return nil end
 	if listHas(S.entIgnore, name) then return nil end
 	if inst:FindFirstChildOfClass("Humanoid") then return "entity", listHas(S.entDanger, name) end
 	if listHas(S.entDanger, name) then return "entity", true end
@@ -768,7 +776,7 @@ local function trackEntity(inst, silent)
 		if ents[a] then return end
 		a = a.Parent
 	end
-	local part = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+	local part = inst:IsA("BasePart") and inst or inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
 	if not part then return end
 
 	local color = cat == "entity" and (danger and T.bad or T.orange)
@@ -786,6 +794,10 @@ local function trackEntity(inst, silent)
 		TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0, Font = Enum.Font.Gotham, TextScaled = true, NoBind = true,
 	}, o.bb)
 	ents[inst] = o
+	-- once alt parcalar izlendiyse (door frame vb.), sadece en dis kapiyi birak
+	for other in pairs(ents) do
+		if other ~= inst and other:IsDescendantOf(inst) then untrackEntity(other) end
+	end
 
 	if cat == "entity" and not silent then
 		local myRoot = getRoot()
@@ -810,7 +822,7 @@ function X.refreshEnt()
 		local n = 0
 		for _, d in ipairs(workspace:GetDescendants()) do
 			if id ~= scanId then return end
-			if d:IsA("Model") then trackEntity(d, true) end
+			if d:IsA("Model") or d:IsA("BasePart") then trackEntity(d, true) end
 			n += 1
 			if n % 1500 == 0 then task.wait() end
 		end
@@ -819,37 +831,53 @@ end
 X.refreshEnt()
 
 workspace.DescendantAdded:Connect(function(d)
-	if not S.entOn or not d:IsA("Model") then return end
+	if not S.entOn then return end
+	if not d:IsA("Model") and not (d:IsA("BasePart") and S.entDoor and listHas(S.entDoors, d.Name)) then return end
 	local silent = os.clock() - startTime < 4
 	task.delay(0.2, function()
 		if d.Parent then trackEntity(d, silent) end
 	end)
 end)
 
+local MAX_DOOR_HL = 24 -- Roblox ayni anda ~31 highlight cizer; en yakin kapilara verilir
 local function updateEntities()
 	local myRoot = getRoot()
+	local doors = {}
 	for inst, o in pairs(ents) do
 		if not inst:IsDescendantOf(workspace) then
 			untrackEntity(inst)
 		else
 			if not o.part:IsDescendantOf(workspace) then
-				o.part = inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+				o.part = inst:IsA("BasePart") and inst or inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
 				o.bb.Adornee = o.part
 			end
 			if o.part then
 				local dist = myRoot and (o.part.Position - myRoot.Position).Magnitude or 0
-				local isEnt = o.cat == "entity"
-				local visible = isEnt or dist <= S.objMax
+				o.dist = dist
+				local cat = o.cat
+				-- varlik ve kapilar mesafeden bagimsiz gorunur, digerleri max mesafeye kadar
+				local visible = cat == "entity" or cat == "door" or dist <= S.objMax
 				o.bb.Enabled = visible
 				if visible then o.distLbl.Text = string.format("%d stud", math.floor(dist + 0.5)) end
-				local wantHl = visible and (isEnt and S.entHighlight or (not isEnt and S.entObjHl))
-				if wantHl and not o.hl then
-					o.hl = makeHl(inst, o.color)
-				elseif not wantHl and o.hl then
-					o.hl:Destroy()
-					o.hl = nil
+				if cat == "entity" then
+					o.wantHl = visible and S.entHighlight
+				elseif cat == "door" then
+					o.wantHl = false
+					if S.entDoorHl then table.insert(doors, o) end
+				else
+					o.wantHl = visible and S.entObjHl
 				end
 			end
+		end
+	end
+	table.sort(doors, function(a, b) return a.dist < b.dist end)
+	for i = 1, math.min(#doors, MAX_DOOR_HL) do doors[i].wantHl = true end
+	for inst, o in pairs(ents) do
+		if o.wantHl and not o.hl then
+			o.hl = makeHl(inst, o.color)
+		elseif not o.wantHl and o.hl then
+			o.hl:Destroy()
+			o.hl = nil
 		end
 	end
 end
@@ -1199,6 +1227,7 @@ addToggle(pVis, "İzleyici aktif", true, function(v)
 end, "entOn")
 addToggle(pVis, "Varlık highlight (humanoid / tehlikeli)", true, function(v) S.entHighlight = v end, "entHighlight")
 addToggle(pVis, "Kapıları göster", true, function(v) S.entDoor = v; X.refreshEnt() end, "entDoor")
+addToggle(pVis, "Kapı highlight (en yakın 24, her mesafe)", true, function(v) S.entDoorHl = v end, "entDoorHl")
 addToggle(pVis, "Dolap / saklanma yerlerini göster", true, function(v) S.entHide = v; X.refreshEnt() end, "entHide")
 addToggle(pVis, "Eşyaları göster", false, function(v) S.entItem = v; X.refreshEnt() end, "entItem")
 addToggle(pVis, "Kapı/dolap highlight (en fazla ~31)", false, function(v) S.entObjHl = v end, "entObjHl")
