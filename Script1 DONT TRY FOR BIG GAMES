@@ -1,4 +1,4 @@
-﻿--// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
+--// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -124,6 +124,8 @@ local S = {
 	bgId = BG_IMAGE_ID, bgTrans = 0.35,
 	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
 	antiSlip = false, noTouch = true,
+	godMode = false, clockOn = false, clockTime = 14, noFog = false, crosshair = false,
+	zoomOn = false, zoom = 400, showStats = false,
 }
 local DEFAULT_GRAVITY = workspace.Gravity
 local DEFAULT_FOV = camera.FieldOfView
@@ -138,7 +140,8 @@ local function getRoot()
 	return c and c:FindFirstChild("HumanoidRootPart")
 end
 
-local X = { cur = 0, baseWalk = 16, speeding = false, themeIndex = DEFAULT_THEME } -- ortak durum + sonradan baglanan fonksiyonlar
+local X = { cur = 0, baseWalk = 16, speeding = false, themeIndex = DEFAULT_THEME,
+	clock0 = Lighting.ClockTime, fog0 = Lighting.FogEnd, zoom0 = player.CameraMaxZoomDistance, fps = 60 } -- ortak durum + sonradan baglanan fonksiyonlar
 local lastDeathCF, pendingRevive, safePos
 local function teleportTo(cf)
 	local root = getRoot()
@@ -873,6 +876,15 @@ do
 	end
 end
 
+-- crosshair + FPS/ping gostergesi
+X.crossH = new("Frame", { Size = UDim2.fromOffset(14, 2), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	BackgroundColor3 = Color3.new(1, 0.2, 0.2), BorderSizePixel = 0, Visible = false, NoBind = true }, gui)
+X.crossV = new("Frame", { Size = UDim2.fromOffset(2, 14), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	BackgroundColor3 = Color3.new(1, 0.2, 0.2), BorderSizePixel = 0, Visible = false, NoBind = true }, gui)
+X.stats = new("TextLabel", { Size = UDim2.fromOffset(170, 20), Position = UDim2.fromOffset(60, 8), BackgroundTransparency = 1,
+	TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.4, Font = Enum.Font.Code, TextSize = 14,
+	TextXAlignment = Enum.TextXAlignment.Left, Visible = false, NoBind = true }, gui)
+
 local pPlayer = createTab("Oyuncu", "👤")
 local pMove = createTab("Hareket", "🏃")
 local pTp = createTab("Işınlan", "📍")
@@ -927,6 +939,7 @@ addToggle(pPlayer, "Zıplama aktif", false, function(v) S.jumpOn = v end, "jumpO
 addSlider(pPlayer, "Zıplama gücü", 0, 400, S.jump, function(v) S.jump = v end, 1, "jump")
 addToggle(pPlayer, "Sonsuz zıplama", false, function(v) S.infJump = v end, "infJump")
 addToggle(pPlayer, "Anti-Void (düşünce geri çek)", true, function(v) S.antiVoid = v end, "antiVoid")
+addToggle(pPlayer, "God mode (local can kilidi)", false, function(v) S.godMode = v end, "godMode")
 
 -- HAREKET
 addSection(pMove, "Fly  (F)")
@@ -1013,6 +1026,27 @@ addButton(pTp, "🏁  Spawn noktasına git", function()
 	local sp = workspace:FindFirstChildWhichIsA("SpawnLocation", true)
 	if sp then teleportTo(sp.CFrame + Vector3.new(0, 5, 0)) else notify("SpawnLocation bulunamadı", "warn") end
 end)
+
+-- WAYPOINT LISTESI
+addSection(pTp, "Waypoint listesi")
+do
+	local wpBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pTp)
+	new("UIListLayout", { Padding = UDim.new(0, 5) }, wpBox)
+	local n = 0
+	addButton(pTp, "➕  Waypoint ekle (şu anki konum)", function()
+		local r = getRoot()
+		if not r then return end
+		n += 1
+		local cf = r.CFrame
+		local rw = row(wpBox, 36)
+		new("TextLabel", {
+			Size = UDim2.new(1, -130, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1, Text = "WP " .. n,
+			TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left,
+		}, rw)
+		miniBtn(rw, "Git", -118, function() teleportTo(cf) end)
+		miniBtn(rw, "Sil", -60, function() rw:Destroy() end)
+	end)
+end
 
 -- SUNUCU / LOG
 do
@@ -1108,6 +1142,23 @@ addToggle(pVis, "Fullbright", false, function(v)
 end, "fullbright")
 addToggle(pVis, "FOV aktif", false, function(v) S.fovOn = v end, "fovOn")
 addSlider(pVis, "FOV", 30, 120, S.fov, function(v) S.fov = v end, 1, "fov")
+addSection(pVis, "Ortam / Kamera")
+addToggle(pVis, "Saati kilitle", false, function(v)
+	S.clockOn = v
+	if not v then Lighting.ClockTime = X.clock0 end
+end, "clockOn")
+addSlider(pVis, "Saat (0-24)", 0, 24, S.clockTime, function(v) S.clockTime = v end, 0.5, "clockTime")
+addToggle(pVis, "Sisi kaldır", false, function(v)
+	S.noFog = v
+	if not v then Lighting.FogEnd = X.fog0 end
+end, "noFog")
+addToggle(pVis, "Crosshair", false, function(v) S.crosshair = v end, "crosshair")
+addToggle(pVis, "Zoom limitini kaldır", false, function(v)
+	S.zoomOn = v
+	if not v then player.CameraMaxZoomDistance = X.zoom0 end
+end, "zoomOn")
+addSlider(pVis, "Max zoom", 10, 2000, S.zoom, function(v) S.zoom = v end, 10, "zoom")
+addToggle(pVis, "FPS / Ping göster", false, function(v) S.showStats = v end, "showStats")
 
 -- AYARLAR
 addSection(pSet, "Tema")
@@ -1345,6 +1396,7 @@ RunService.Heartbeat:Connect(function(dt)
 			if not hum.UseJumpPower then hum.UseJumpPower = true end
 			if hum.JumpPower ~= S.jump then hum.JumpPower = S.jump end
 		end
+		if S.godMode and hum.Health > 0 and hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end
 		if S.flyOn then hum.PlatformStand = true end
 	end
 	if S.gravityOn and workspace.Gravity ~= S.gravity then workspace.Gravity = S.gravity end
@@ -1359,8 +1411,17 @@ RunService.Heartbeat:Connect(function(dt)
 	end
 end)
 
-RunService.RenderStepped:Connect(function()
+RunService.RenderStepped:Connect(function(dt)
 	if S.flyOn then updateFly() end
+	if S.clockOn then Lighting.ClockTime = S.clockTime end
+	if S.noFog then Lighting.FogEnd = 1e6 end
+	if S.zoomOn and player.CameraMaxZoomDistance ~= S.zoom then player.CameraMaxZoomDistance = S.zoom end
+	X.crossH.Visible, X.crossV.Visible = S.crosshair, S.crosshair
+	X.stats.Visible = S.showStats
+	if S.showStats and dt > 0 then
+		X.fps = X.fps * 0.9 + (1 / dt) * 0.1
+		X.stats.Text = string.format("FPS %d  |  Ping %d ms", X.fps, player:GetNetworkPing() * 2000)
+	end
 	if S.fovOn and camera.FieldOfView ~= S.fov then camera.FieldOfView = S.fov end
 	if S.espOn then updateESP() end
 	if S.entOn then updateEntities() end
