@@ -1,51 +1,4 @@
---// HUNTER-PANEL (tek LocalScript) -> StarterPlayerScripts
-
-local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-
-local function disableTouch(character)
-    for _, part in ipairs(character:GetDescendants()) do
-        if part:IsA("BasePart") then
-            part.CanTouch = false
-        end
-    end
-
-    character.DescendantAdded:Connect(function(part)
-        if part:IsA("BasePart") then
-            part.CanTouch = false
-        end
-    end)
-end
-
-if player.Character then
-    disableTouch(player.Character)
-end
-
-player.CharacterAdded:Connect(disableTouch)
-
-
-local Players = game:GetService("Players")
-local player = Players.LocalPlayer
-
-local character = player.Character
-    or player.CharacterAdded:Wait()
-
-character.Archivable = true
-
-local dummy = character:Clone()
-dummy.Name = "LocalDummy"
-
-for _, obj in ipairs(dummy:GetDescendants()) do
-    if obj:IsA("Script") or obj:IsA("LocalScript") then
-        obj:Destroy()
-    elseif obj:IsA("BasePart") then
-        obj.Anchored = true
-        obj.CanCollide = false
-    end
-end
-
-dummy.Parent = workspace
-dummy:PivotTo(character:GetPivot() * CFrame.new(0, 0, -5000))
+﻿--// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -54,6 +7,7 @@ local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local LogService = game:GetService("LogService")
 local TextChatService = game:GetService("TextChatService")
+local HttpService = game:GetService("HttpService")
 
 ------------------------------------------------------------------
 -- AYARLAR (burayi doldur)
@@ -168,6 +122,8 @@ local S = {
 	logClient = false,
 	soundOn = true, soundVol = 0.6,
 	bgId = BG_IMAGE_ID, bgTrans = 0.35,
+	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
+	antiSlip = false, noTouch = true,
 }
 local DEFAULT_GRAVITY = workspace.Gravity
 local DEFAULT_FOV = camera.FieldOfView
@@ -182,11 +138,13 @@ local function getRoot()
 	return c and c:FindFirstChild("HumanoidRootPart")
 end
 
+local X = { cur = 0, baseWalk = 16, speeding = false, themeIndex = DEFAULT_THEME } -- ortak durum + sonradan baglanan fonksiyonlar
 local lastDeathCF, pendingRevive, safePos
 local function teleportTo(cf)
 	local root = getRoot()
 	if not root then return end
 	root.CFrame = cf
+	X.lastPos = nil
 	root.AssemblyLinearVelocity = Vector3.zero
 end
 
@@ -280,6 +238,14 @@ local floatBtn = new("TextButton", {
 round(floatBtn, 20)
 floatBtn.MouseButton1Click:Connect(function() main.Visible = not main.Visible end)
 
+-- panel aciksa fare serbest kalsin (birinci sahis / kilitli kamerada bile)
+local modalBtn = new("TextButton", {
+	Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1, Text = "", Modal = true, NoBind = true,
+}, gui)
+local function syncMouse() modalBtn.Modal = main.Visible end
+main:GetPropertyChangedSignal("Visible"):Connect(syncMouse)
+syncMouse()
+
 ------------------------------------------------------------------
 -- SES + BILDIRIM
 ------------------------------------------------------------------
@@ -367,6 +333,17 @@ end
 ------------------------------------------------------------------
 -- UI BILESENLERI
 ------------------------------------------------------------------
+-- ayar degisince 1 sn sonra otomatik kaydet
+local saveQueued = false
+local function markDirty()
+	if saveQueued then return end
+	saveQueued = true
+	task.delay(1, function()
+		saveQueued = false
+		if X.save then X.save() end
+	end)
+end
+
 local pages, tabBtns, currentTab = {}, {}, nil
 local toggleRenders = {}
 
@@ -449,13 +426,14 @@ local function addToggle(page, text, default, cb, key)
 		state = not state
 		render(true)
 		cb(state)
+		markDirty()
 	end)
-	if key then registry[key] = { set = set, default = default, cb = cb } end
+	if key then registry[key] = { set = set, default = default, cb = cb, get = function() return state end } end
 	return set
 end
 
 local activeSlider
-local function addSlider(page, text, min, max, default, cb, step)
+local function addSlider(page, text, min, max, default, cb, step, key)
 	step = step or 1
 	local r = row(page, 54)
 	new("TextLabel", {
@@ -477,13 +455,27 @@ local function addSlider(page, text, min, max, default, cb, step)
 	round(knob, 7)
 	local hit = new("TextButton", { Size = UDim2.new(1, 0, 0, 26), Position = UDim2.fromOffset(0, -10), Text = "", BackgroundTransparency = 1 }, track)
 
+	local curVal = default
+	if key then
+		registry[key] = {
+			default = default, cb = cb, get = function() return curVal end,
+			set = function(v)
+				v = math.clamp(v, min, max)
+				curVal = v
+				fill.Size = UDim2.new((v - min) / (max - min), 0, 1, 0)
+				valLbl.Text = fmt(v)
+			end,
+		}
+	end
 	local function setFromX(x, final)
 		local rel = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
 		local v = math.floor((min + (max - min) * rel) / step + 0.5) * step
 		v = math.clamp(v, min, max)
 		fill.Size = UDim2.new((v - min) / (max - min), 0, 1, 0)
 		valLbl.Text = fmt(v)
+		curVal = v
 		cb(v, final)
+		if final then markDirty() end
 	end
 	hit.InputBegan:Connect(function(i)
 		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
@@ -519,7 +511,7 @@ local function addButton(page, text, cb, colorKey)
 	return b
 end
 
-local function addTextBox(page, text, default, cb)
+local function addTextBox(page, text, default, cb, key)
 	local r = row(page)
 	new("TextLabel", {
 		Size = UDim2.new(0, 80, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1, Text = text,
@@ -532,7 +524,14 @@ local function addTextBox(page, text, default, cb)
 	}, r)
 	round(box, 6)
 	new("UIPadding", { PaddingLeft = UDim.new(0, 8) }, box)
-	box.FocusLost:Connect(function() cb(box.Text) end)
+	box.FocusLost:Connect(function() cb(box.Text); markDirty() end)
+	if key then
+		registry[key] = {
+			default = default, cb = cb, get = function() return box.Text end,
+			set = function(v) box.Text = v end,
+		}
+	end
+	return box
 end
 
 ------------------------------------------------------------------
@@ -806,6 +805,74 @@ end)
 ------------------------------------------------------------------
 -- SEKMELER
 ------------------------------------------------------------------
+-- KAYGAN ZEMIN + ANTI GERI-ATMA + DOKUNMA (Heartbeat'ten cagrilir)
+do
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	local floorOrig, slipChar, acc = {}, nil, 0
+	local SLIP_PROPS = PhysicalProperties.new(0.7, 2, 0, 100, 100)
+	local FLOOR_PROPS = PhysicalProperties.new(0.7, 1.5, 0, 100, 100)
+	local lastNote = 0
+
+	local function eachPart(c, fn)
+		for _, p in ipairs(c:GetDescendants()) do
+			if p:IsA("BasePart") then fn(p) end
+		end
+	end
+
+	function X.restoreSlip()
+		for part, orig in pairs(floorOrig) do
+			if part.Parent then part.CustomPhysicalProperties = orig or nil end
+		end
+		table.clear(floorOrig)
+		local c = getChar()
+		if c then eachPart(c, function(p) p.CustomPhysicalProperties = nil end) end
+		slipChar = nil
+	end
+
+	function X.update(dt, hum, root)
+		-- sunucu bizi geri attiysa (tek karede buyuk sicrama) eski konuma dondur
+		local pos = root.Position
+		if S.antiRubber and (S.speedOn or S.flyOn) and X.lastPos and dt < 0.25 then
+			local allowed = math.max(25, X.cur * dt * 3, S.flySpeed * dt * 3)
+			if (pos - X.lastPos).Magnitude > allowed then
+				root.CFrame = CFrame.new(X.lastPos) * (root.CFrame - root.CFrame.Position)
+				pos = X.lastPos
+				if os.clock() - lastNote > 2 then
+					lastNote = os.clock()
+					notify("Geri atma engellendi", "warn")
+				end
+			end
+		end
+		X.lastPos = pos
+
+		acc += dt
+		if acc < 0.15 then return end
+		acc = 0
+		local c = hum.Parent
+
+		if S.noTouch or X.touchApplied then
+			X.touchApplied = S.noTouch
+			eachPart(c, function(p) p.CanTouch = not S.noTouch end)
+		end
+
+		if S.antiSlip then
+			if slipChar ~= c then
+				slipChar = c
+				eachPart(c, function(p) p.CustomPhysicalProperties = SLIP_PROPS end)
+			end
+			rayParams.FilterDescendantsInstances = { c }
+			local hit = workspace:Raycast(root.Position, Vector3.new(0, -8, 0), rayParams)
+			local fp = hit and hit.Instance
+			if fp and not fp:IsA("Terrain") and floorOrig[fp] == nil
+				and (fp.Material == Enum.Material.Ice or fp.CurrentPhysicalProperties.Friction < 0.5) then
+				floorOrig[fp] = fp.CustomPhysicalProperties or false
+				fp.CustomPhysicalProperties = FLOOR_PROPS
+			end
+		end
+	end
+end
+
 local pPlayer = createTab("Oyuncu", "👤")
 local pMove = createTab("Hareket", "🏃")
 local pTp = createTab("Işınlan", "📍")
@@ -838,9 +905,26 @@ addButton(pPlayer, "🔄  Karakteri sıfırla", function()
 end)
 addSection(pPlayer, "Statlar")
 addToggle(pPlayer, "Hız aktif", false, function(v) S.speedOn = v end, "speedOn")
-addSlider(pPlayer, "Hız (WalkSpeed)", 0, 300, S.speed, function(v) S.speed = v end)
+addSlider(pPlayer, "Hız", 0, 300, S.speed, function(v) S.speed = v end, 1, "speed")
+do
+	local modes = { "WalkSpeed", "Velocity", "CFrame" }
+	local modeBtn
+	local function setMode(m)
+		S.speedMode = m
+		if modeBtn then modeBtn.Text = "Hız modu: " .. m .. "  (tıkla değiştir)" end
+	end
+	modeBtn = addButton(pPlayer, "", function()
+		setMode(modes[((table.find(modes, S.speedMode) or 1) % #modes) + 1])
+		markDirty()
+	end)
+	setMode(S.speedMode)
+	registry.speedMode = { default = "WalkSpeed", cb = function() end, get = function() return S.speedMode end, set = setMode }
+end
+addToggle(pPlayer, "Yumuşak hızlanma (geri atmayı azaltır)", true, function(v) S.speedRamp = v end, "speedRamp")
+addSlider(pPlayer, "Hızlanma (stud/sn²)", 10, 600, S.rampRate, function(v) S.rampRate = v end, 10, "rampRate")
+addToggle(pPlayer, "Anti geri-atma (hız/fly açıkken)", true, function(v) S.antiRubber = v end, "antiRubber")
 addToggle(pPlayer, "Zıplama aktif", false, function(v) S.jumpOn = v end, "jumpOn")
-addSlider(pPlayer, "Zıplama gücü", 0, 400, S.jump, function(v) S.jump = v end)
+addSlider(pPlayer, "Zıplama gücü", 0, 400, S.jump, function(v) S.jump = v end, 1, "jump")
 addToggle(pPlayer, "Sonsuz zıplama", false, function(v) S.infJump = v end, "infJump")
 addToggle(pPlayer, "Anti-Void (düşünce geri çek)", true, function(v) S.antiVoid = v end, "antiVoid")
 
@@ -850,16 +934,21 @@ local setFly = addToggle(pMove, "Fly", false, function(v)
 	S.flyOn = v
 	if not v then stopFly() end
 end, "flyOn")
-addSlider(pMove, "Fly hızı", 10, 400, S.flySpeed, function(v) S.flySpeed = v end)
+addSlider(pMove, "Fly hızı", 10, 400, S.flySpeed, function(v) S.flySpeed = v end, 1, "flySpeed")
 addSection(pMove, "NoClip  (N)")
 local setNoclip = addToggle(pMove, "NoClip (havada asılı kalır)", false, function(v) S.noclip = v end, "noclip")
-addSlider(pMove, "NoClip yukarı/aşağı hız", 10, 200, S.noclipVert, function(v) S.noclipVert = v end)
+addSlider(pMove, "NoClip yukarı/aşağı hız", 10, 200, S.noclipVert, function(v) S.noclipVert = v end, 1, "noclipVert")
 addSection(pMove, "Fizik")
 addToggle(pMove, "Yerçekimi aktif", false, function(v)
 	S.gravityOn = v
 	if not v then workspace.Gravity = DEFAULT_GRAVITY end
 end, "gravityOn")
-addSlider(pMove, "Yerçekimi", 0, 400, S.gravity, function(v) S.gravity = v end)
+addSlider(pMove, "Yerçekimi", 0, 400, S.gravity, function(v) S.gravity = v end, 1, "gravity")
+addToggle(pMove, "Kaygan zemini kaldır (buz vs.)", false, function(v)
+	S.antiSlip = v
+	if not v then X.restoreSlip() end
+end, "antiSlip")
+addToggle(pMove, "Dokunma kapalı (kill brick vs.)", true, function(v) S.noTouch = v end, "noTouch")
 addSection(pMove, "Tıkla ışınlan")
 addToggle(pMove, "Click TP (CTRL + tıkla)", false, function(v) S.clickTP = v end, "clickTP")
 
@@ -985,7 +1074,7 @@ addToggle(pVis, "Highlight", true, function(v) S.espHighlight = v end, "espHighl
 addToggle(pVis, "İsim", true, function(v) S.espName = v end, "espName")
 addToggle(pVis, "Mesafe (isim altında)", true, function(v) S.espDist = v end, "espDist")
 addToggle(pVis, "Takım rengi", false, function(v) S.espTeam = v end, "espTeam")
-addSlider(pVis, "ESP max mesafe (stud)", 50, 20000, S.espMax, function(v) S.espMax = v end, 50)
+addSlider(pVis, "ESP max mesafe (stud)", 50, 20000, S.espMax, function(v) S.espMax = v end, 50, "espMax")
 addSection(pVis, "Spawn izleyici + sesli uyarı")
 addToggle(pVis, "Yeni çıkan şeyleri göster", true, function(v)
 	S.entOn = v
@@ -993,8 +1082,8 @@ addToggle(pVis, "Yeni çıkan şeyleri göster", true, function(v)
 end, "entOn")
 addToggle(pVis, "Highlight", true, function(v) S.entHighlight = v end, "entHighlight")
 addToggle(pVis, "Sesli uyarı", true, function(v) S.soundOn = v end, "soundOn")
-addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t end)
-addTextBox(pVis, "Yoksay:", S.entIgnore, function(t) S.entIgnore = t end)
+addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t end, "entDanger")
+addTextBox(pVis, "Yoksay:", S.entIgnore, function(t) S.entIgnore = t end, "entIgnore")
 addButton(pVis, "Takip edilenleri temizle", clearEntities)
 addSection(pVis, "Debug")
 addToggle(pVis, "Hitbox'ları göster", false, function(v)
@@ -1018,21 +1107,25 @@ addToggle(pVis, "Fullbright", false, function(v)
 	end
 end, "fullbright")
 addToggle(pVis, "FOV aktif", false, function(v) S.fovOn = v end, "fovOn")
-addSlider(pVis, "FOV", 30, 120, S.fov, function(v) S.fov = v end)
+addSlider(pVis, "FOV", 30, 120, S.fov, function(v) S.fov = v end, 1, "fov")
 
 -- AYARLAR
 addSection(pSet, "Tema")
 do
 	local grid = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pSet)
 	new("UIGridLayout", { CellSize = UDim2.new(0.5, -4, 0, 32), CellPadding = UDim2.fromOffset(6, 6) }, grid)
-	for _, th in ipairs(THEMES) do
+	for idx, th in ipairs(THEMES) do
 		local b = new("TextButton", {
 			BackgroundColor3 = T.card, Text = th.name, TextColor3 = T.text,
 			Font = Enum.Font.GothamMedium, TextSize = 12, AutoButtonColor = false,
 		}, grid)
 		round(b, 8)
 		new("UIStroke", { Color = th.accent, Thickness = 1.5, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, NoBind = true }, b)
-		b.MouseButton1Click:Connect(function() applyTheme(th) end)
+		b.MouseButton1Click:Connect(function()
+			X.themeIndex = idx
+			applyTheme(th)
+			markDirty()
+		end)
 	end
 end
 addSection(pSet, "Arka plan görseli (anime vb.)")
@@ -1040,26 +1133,89 @@ addTextBox(pSet, "Görsel ID:", S.bgId, function(t)
 	S.bgId = t
 	setBgImage()
 	if t ~= "" and not t:match("%d+") then notify("Geçersiz ID", "warn") end
-end)
+end, "bgId")
 addSlider(pSet, "Görsel saydamlığı (0 = net)", 0, 1, S.bgTrans, function(v)
 	S.bgTrans = v
 	bgImage.ImageTransparency = v
-end, 0.05)
+end, 0.05, "bgTrans")
 addSection(pSet, "Uyarı sesi")
 addTextBox(pSet, "Özel ses ID:", SOUND_ID, function(t)
 	local id = t:match("%d+")
 	alertSound.SoundId = id and ("rbxassetid://" .. id) or DEFAULT_SOUND
-end)
-addSlider(pSet, "Ses seviyesi", 0, 1, S.soundVol, function(v) S.soundVol = v end, 0.05)
+end, "soundId")
+addSlider(pSet, "Ses seviyesi", 0, 1, S.soundVol, function(v) S.soundVol = v end, 0.05, "soundVol")
 addButton(pSet, "🔔  Normal uyarıyı test et", function() playAlert(false, true) end)
 addButton(pSet, "🚨  Tehlike uyarısını test et", function() playAlert(true, true) end)
 addSection(pSet, "Arayüz")
-addSlider(pSet, "Panel boyutu", 0.6, 1.4, uiScale.Scale, function(v) uiScale.Scale = v end, 0.05)
+addSlider(pSet, "Panel boyutu", 0.6, 1.4, uiScale.Scale, function(v) uiScale.Scale = v end, 0.05, "uiScale")
 addSection(pSet, "Kısayollar")
 for _, t in ipairs({ "K  →  Paneli aç/kapat", "F  →  Fly", "N  →  NoClip", "CTRL + tık  →  Click TP", "Space / Shift  →  Fly ve NoClip'te yukarı / aşağı" }) do
 	new("TextLabel", {
 		Size = UDim2.new(1, 0, 0, 20), BackgroundTransparency = 1, Text = "  " .. t, TextColor3 = T.sub,
 		Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	}, pSet)
+end
+addSection(pSet, "Ayarları kaydet")
+do
+	local FILE = "HunterPanel_settings.json"
+	local canFile = typeof(writefile) == "function" and typeof(readfile) == "function"
+	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true }
+
+	local function encode()
+		local data = { theme = X.themeIndex, v = {} }
+		for k, r in pairs(registry) do
+			if not NO_SAVE[k] and r.get then data.v[k] = r.get() end
+		end
+		return HttpService:JSONEncode(data)
+	end
+	local function apply(json)
+		local ok, data = pcall(HttpService.JSONDecode, HttpService, json)
+		if not ok or type(data) ~= "table" then return false end
+		if THEMES[data.theme] then
+			X.themeIndex = data.theme
+			applyTheme(THEMES[data.theme])
+		end
+		for k, v in pairs(data.v or {}) do
+			local r = registry[k]
+			if r and not NO_SAVE[k] and typeof(v) == typeof(r.get()) then
+				r.set(v)
+				r.cb(v)
+			end
+		end
+		return true
+	end
+
+	function X.save(manual)
+		if not canFile then
+			if manual then notify("Dosya kaydı yok - JSON'u kopyalayıp sakla", "warn") end
+			return
+		end
+		local ok = pcall(writefile, FILE, encode())
+		if manual then notify(ok and "Ayarlar kaydedildi" or "Kaydedilemedi", ok and "ok" or "bad") end
+	end
+	function X.load(silent)
+		if not canFile then return end
+		local ok, txt = pcall(readfile, FILE)
+		if ok and txt and apply(txt) then
+			if not silent then notify("Ayarlar yüklendi", "ok") end
+		elseif not silent then
+			notify("Kayıtlı ayar yok", "warn")
+		end
+	end
+
+	addButton(pSet, "💾  Şimdi kaydet", function() X.save(true) end, "accent")
+	addButton(pSet, "📂  Kayıtlı ayarları yükle", function() X.load(false) end)
+	local jsonBox = addTextBox(pSet, "JSON:", "", function(t)
+		if t:sub(1, 1) == "{" then
+			local ok = apply(t)
+			notify(ok and "JSON yüklendi" or "Geçersiz JSON", ok and "ok" or "bad")
+		end
+	end)
+	addButton(pSet, "📋  Ayarları JSON olarak göster", function() jsonBox.Text = encode() end)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, TextWrapped = true, TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+		Text = canFile and ("  Otomatik kayıt: " .. FILE) or "  writefile yok: otomatik kayıt çalışmaz, JSON'u kopyalayıp kutuya yapıştır",
 	}, pSet)
 end
 addSection(pSet, "Sıfırla")
@@ -1077,6 +1233,7 @@ addButton(pSet, "Tüm ayarları sıfırla", function()
 end, "bad")
 
 selectTab("Oyuncu")
+X.load(true)
 
 ------------------------------------------------------------------
 -- SUNUCUDAN GELEN MESAJLAR
@@ -1159,10 +1316,31 @@ RunService.Stepped:Connect(function()
 	end
 end)
 
-RunService.Heartbeat:Connect(function()
+RunService.Heartbeat:Connect(function(dt)
 	local hum, root = getHum(), getRoot()
 	if hum then
-		if S.speedOn and hum.WalkSpeed ~= S.speed then hum.WalkSpeed = S.speed end
+		if S.speedOn then
+			if not X.speeding then X.speeding = true; X.cur = X.baseWalk end
+			local step = S.speedRamp and S.rampRate * dt or math.huge
+			X.cur = X.cur + math.clamp(S.speed - X.cur, -step, step)
+			if S.speedMode == "WalkSpeed" then
+				if hum.WalkSpeed ~= X.cur then hum.WalkSpeed = X.cur end
+			else
+				if hum.WalkSpeed ~= X.baseWalk then hum.WalkSpeed = X.baseWalk end
+				local dir = hum.MoveDirection
+				if root and not S.flyOn and dir.Magnitude > 0 then
+					if S.speedMode == "Velocity" then
+						local v = root.AssemblyLinearVelocity
+						root.AssemblyLinearVelocity = Vector3.new(dir.X * X.cur, v.Y, dir.Z * X.cur)
+					else
+						root.CFrame = root.CFrame + dir * math.max(0, X.cur - X.baseWalk) * dt
+					end
+				end
+			end
+		else
+			if X.speeding then X.speeding = false; hum.WalkSpeed = X.baseWalk end
+			X.baseWalk = hum.WalkSpeed
+		end
 		if S.jumpOn then
 			if not hum.UseJumpPower then hum.UseJumpPower = true end
 			if hum.JumpPower ~= S.jump then hum.JumpPower = S.jump end
@@ -1171,6 +1349,7 @@ RunService.Heartbeat:Connect(function()
 	end
 	if S.gravityOn and workspace.Gravity ~= S.gravity then workspace.Gravity = S.gravity end
 	if root and hum then
+		X.update(dt, hum, root)
 		if hum.FloorMaterial ~= Enum.Material.Air and root.Position.Y > S.voidY + 100 then
 			safePos = root.CFrame
 		end
@@ -1235,12 +1414,14 @@ end
 local function setupChar(char)
 	camera = workspace.CurrentCamera
 	flyBV, flyBG, safePos = nil, nil, nil
+	X.lastPos, X.speeding = nil, false
 	task.spawn(hookDeath, char)
 	local root = char:WaitForChild("HumanoidRootPart", 10)
 	if not root then return end
 	if lastDeathCF and (pendingRevive or S.respawnAtDeath) then
 		task.wait(0.15)
 		char:PivotTo(lastDeathCF + Vector3.new(0, 3, 0))
+		X.lastPos = nil
 		if pendingRevive then notify("Öldüğün yerde yeniden doğdun", "ok") end
 		pendingRevive = false
 	end
