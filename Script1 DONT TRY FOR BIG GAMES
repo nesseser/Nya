@@ -1,4 +1,3 @@
-
 --// HUNTER-PANEL v2 (tek LocalScript) -> StarterPlayerScripts
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -127,6 +126,8 @@ local S = {
 	bgId = BG_IMAGE_ID, bgTrans = 0.35,
 	speedMode = "WalkSpeed", speedRamp = true, rampRate = 80, antiRubber = true,
 	antiSlip = false, noTouch = true,
+	autoCollect = false, collectMode = "Yürü", collectSpeed = 60, collectDelay = 0.4, collectMax = 2000,
+	killNames ="kill,lava,death,damage,hurt,trap,spike,acid,laser,fire,poison,void,zap,electric",
 	godMode = false, clockOn = false, clockTime = 14, noFog = false, crosshair = false,
 	zoomOn = false, zoom = 400, showStats = false,
 }
@@ -741,9 +742,14 @@ local function classify(inst)
 	if inst:IsA("Terrain") then return nil end
 	local name = inst.Name
 	if not inst:IsA("Model") then
-		-- tek parca halindeki kapilar
-		if inst:IsA("BasePart") and S.entDoor and not listHas(S.entIgnore, name) and listHas(S.entDoors, name) then
-			return "door"
+		-- yerdeki Tool'lar ve tek parca kapi / esyalar
+		if inst:IsA("Tool") then
+			if S.entItem and inst.Parent and not inst.Parent:FindFirstChildOfClass("Humanoid") then return "item" end
+			return nil
+		end
+		if inst:IsA("BasePart") and not listHas(S.entIgnore, name) then
+			if S.entDoor and listHas(S.entDoors, name) then return "door" end
+			if S.entItem and listHas(S.entItems, name) then return "item" end
 		end
 		return nil
 	end
@@ -822,7 +828,7 @@ function X.refreshEnt()
 		local n = 0
 		for _, d in ipairs(workspace:GetDescendants()) do
 			if id ~= scanId then return end
-			if d:IsA("Model") or d:IsA("BasePart") then trackEntity(d, true) end
+			if d:IsA("Model") or d:IsA("BasePart") or d:IsA("Tool") then trackEntity(d, true) end
 			n += 1
 			if n % 1500 == 0 then task.wait() end
 		end
@@ -832,7 +838,9 @@ X.refreshEnt()
 
 workspace.DescendantAdded:Connect(function(d)
 	if not S.entOn then return end
-	if not d:IsA("Model") and not (d:IsA("BasePart") and S.entDoor and listHas(S.entDoors, d.Name)) then return end
+	local ok = d:IsA("Model") or d:IsA("Tool") or (d:IsA("BasePart")
+		and ((S.entDoor and listHas(S.entDoors, d.Name)) or (S.entItem and listHas(S.entItems, d.Name))))
+	if not ok then return end
 	local silent = os.clock() - startTime < 4
 	task.delay(0.2, function()
 		if d.Parent then trackEntity(d, silent) end
@@ -933,6 +941,43 @@ do
 		end
 	end
 
+	-- sadece oldurucu bloklarin dokunmasini kapat (kapi vb. etkilenmez)
+	local killOrig = {}
+	local function isKill(p)
+		if not p:IsA("BasePart") then return false end
+		if listHas(S.killNames, p.Name) then return true end
+		local par = p.Parent
+		return par ~= nil and par:IsA("Model") and listHas(S.killNames, par.Name)
+	end
+	local function disableKill(p)
+		if killOrig[p] == nil then
+			killOrig[p] = p.CanTouch
+			p.CanTouch = false
+		end
+	end
+	local killScan = 0
+	function X.refreshKill()
+		killScan += 1
+		local id = killScan
+		for p, orig in pairs(killOrig) do
+			if p.Parent then p.CanTouch = orig end
+		end
+		table.clear(killOrig)
+		if not S.noTouch then return end
+		task.spawn(function()
+			local n = 0
+			for _, d in ipairs(workspace:GetDescendants()) do
+				if id ~= killScan then return end
+				if isKill(d) then disableKill(d) end
+				n += 1
+				if n % 1500 == 0 then task.wait() end
+			end
+		end)
+	end
+	workspace.DescendantAdded:Connect(function(d)
+		if S.noTouch and isKill(d) then disableKill(d) end
+	end)
+
 	function X.restoreSlip()
 		for part, orig in pairs(floorOrig) do
 			if part.Parent then part.CustomPhysicalProperties = orig or nil end
@@ -964,11 +1009,6 @@ do
 		acc = 0
 		local c = hum.Parent
 
-		if S.noTouch or X.touchApplied then
-			X.touchApplied = S.noTouch
-			eachPart(c, function(p) p.CanTouch = not S.noTouch end)
-		end
-
 		if S.antiSlip then
 			if slipChar ~= c then
 				slipChar = c
@@ -998,6 +1038,7 @@ X.stats = new("TextLabel", { Size = UDim2.fromOffset(170, 20), Position = UDim2.
 local pPlayer = createTab("Oyuncu", "👤")
 local pMove = createTab("Hareket", "🏃")
 local pTp = createTab("Işınlan", "📍")
+local pItem = createTab("Eşya", "🎒")
 local pLog = createTab("Sunucu", "📡", true)
 local pVis = createTab("Görsel", "👁")
 local pSet = createTab("Ayarlar", "⚙")
@@ -1071,7 +1112,11 @@ addToggle(pMove, "Kaygan zemini kaldır (buz vs.)", false, function(v)
 	S.antiSlip = v
 	if not v then X.restoreSlip() end
 end, "antiSlip")
-addToggle(pMove, "Dokunma kapalı (kill brick vs.)", true, function(v) S.noTouch = v end, "noTouch")
+addToggle(pMove, "Öldüren blokların dokunması kapalı", true, function(v)
+	S.noTouch = v
+	X.refreshKill()
+end, "noTouch")
+addTextBox(pMove, "Kill blok:", S.killNames, function(t) S.killNames = t; X.refreshKill() end, "killNames")
 addSection(pMove, "Tıkla ışınlan")
 addToggle(pMove, "Click TP (CTRL + tıkla)", false, function(v) S.clickTP = v end, "clickTP")
 
@@ -1158,6 +1203,194 @@ do
 	end)
 end
 
+-- ESYA LISTESI + OTOMATIK TOPLAMA
+do
+	local tried = {}
+	local running = false
+
+	local function itemPos(o) return o.part.Position end
+
+	local function nearestItem()
+		local root = getRoot()
+		if not root then return nil end
+		local best, bd
+		for inst, o in pairs(ents) do
+			if o.cat == "item" and o.part and o.part:IsDescendantOf(workspace)
+				and (not tried[inst] or os.clock() - tried[inst] > 30) then
+				local d = (itemPos(o) - root.Position).Magnitude
+				if d <= S.collectMax and (not bd or d < bd) then best, bd = inst, d end
+			end
+		end
+		return best
+	end
+
+	-- noktadan noktaya git: Işınlan = aninda, Yürü = collectSpeed hizinda
+	local function moveTo(pos)
+		if S.collectMode == "Işınlan" then
+			if not getRoot() then return false end
+			teleportTo(CFrame.new(pos))
+			return true
+		end
+		while S.autoCollect or S.collectManual do
+			local root = getRoot()
+			if not root then return false end
+			local delta = pos - root.Position
+			local dist = delta.Magnitude
+			if dist < 3 then return true end
+			local dt = RunService.Heartbeat:Wait()
+			root.CFrame = root.CFrame + delta.Unit * math.min(dist, S.collectSpeed * dt)
+			root.AssemblyLinearVelocity = Vector3.zero
+		end
+		return false
+	end
+
+	local function pickup(inst, o)
+		local root = getRoot()
+		if root and typeof(firetouchinterest) == "function" then
+			pcall(function()
+				firetouchinterest(root, o.part, 0)
+				firetouchinterest(root, o.part, 1)
+			end)
+		end
+		local pp = inst:FindFirstChildWhichIsA("ProximityPrompt", true)
+		if pp then
+			pcall(function()
+				if typeof(fireproximityprompt) == "function" then
+					fireproximityprompt(pp)
+				else
+					pp:InputHoldBegin()
+					task.wait(pp.HoldDuration + 0.1)
+					pp:InputHoldEnd()
+				end
+			end)
+		end
+		local cd = inst:FindFirstChildWhichIsA("ClickDetector", true)
+		if cd and typeof(fireclickdetector) == "function" then pcall(fireclickdetector, cd) end
+	end
+
+	local function collectOne(inst)
+		local o = ents[inst]
+		if not o or not o.part then return end
+		tried[inst] = os.clock()
+		S.collectManual = true
+		if moveTo(itemPos(o)) then pickup(inst, o) end
+		S.collectManual = false
+	end
+
+	function X.startCollect()
+		if running then return end
+		running = true
+		table.clear(tried)
+		task.spawn(function()
+			while S.autoCollect do
+				local inst = nearestItem()
+				if inst then
+					collectOne(inst)
+					task.wait(S.collectDelay)
+				else
+					task.wait(0.5)
+				end
+			end
+			running = false
+		end)
+	end
+
+	addSection(pItem, "Eşya takibi")
+	addToggle(pItem, "Eşyaları izle (listele)", false, function(v)
+		S.entItem = v
+		X.refreshEnt()
+	end, "entItem")
+	addTextBox(pItem, "Eşya adı:", S.entItems, function(t) S.entItems = t; X.refreshEnt() end, "entItems")
+	addSection(pItem, "Otomatik toplama")
+	addToggle(pItem, "Otomatik topla (en yakından başla)", false, function(v)
+		S.autoCollect = v
+		if v then
+			if not S.entItem then
+				registry.entItem.set(true)
+				registry.entItem.cb(true)
+			end
+			notify("Otomatik toplama başladı", "ok")
+			X.startCollect()
+		end
+	end, "autoCollect")
+	do
+		local modes = { "Yürü", "Işınlan" }
+		local modeBtn
+		local function setMode(m)
+			S.collectMode = m
+			if modeBtn then modeBtn.Text = "Gidiş: " .. m .. "  (tıkla değiştir)" end
+		end
+		modeBtn = addButton(pItem, "", function()
+			setMode(modes[((table.find(modes, S.collectMode) or 1) % #modes) + 1])
+			markDirty()
+		end)
+		setMode(S.collectMode)
+		registry.collectMode = { default = "Yürü", cb = function() end, get = function() return S.collectMode end, set = setMode }
+	end
+	addSlider(pItem, "Yürüme hızı (stud/sn)", 10, 300, S.collectSpeed, function(v) S.collectSpeed = v end, 5, "collectSpeed")
+	addSlider(pItem, "Eşyalar arası bekleme (sn)", 0, 3, S.collectDelay, function(v) S.collectDelay = v end, 0.1, "collectDelay")
+	addSlider(pItem, "Max toplama mesafesi", 50, 5000, S.collectMax, function(v) S.collectMax = v end, 50, "collectMax")
+
+	addSection(pItem, "Bulunan eşyalar")
+	local countLbl = new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 18), BackgroundTransparency = 1, Text = "", TextColor3 = T.sub,
+		Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+	}, pItem)
+	local listBox = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, pItem)
+	new("UIListLayout", { Padding = UDim.new(0, 5) }, listBox)
+
+	local shown, sig = {}, ""
+	local function refreshList(force)
+		local root = getRoot()
+		local arr = {}
+		for inst, o in pairs(ents) do
+			if o.cat == "item" and o.part then
+				table.insert(arr, { inst = inst, d = root and (itemPos(o) - root.Position).Magnitude or 0 })
+			end
+		end
+		table.sort(arr, function(a, b) return a.d < b.d end)
+		countLbl.Text = "  " .. #arr .. " eşya bulundu (en yakın 25 listelenir)"
+		local s = {}
+		for i = 1, math.min(#arr, 25) do s[i] = arr[i].inst:GetFullName() end
+		local newSig = table.concat(s, "|")
+		if force or newSig ~= sig then
+			sig = newSig
+			for _, c in ipairs(listBox:GetChildren()) do
+				if c:IsA("Frame") then c:Destroy() end
+			end
+			table.clear(shown)
+			for i = 1, math.min(#arr, 25) do
+				local inst = arr[i].inst
+				local r = row(listBox, 36)
+				local lbl = new("TextLabel", {
+					Size = UDim2.new(1, -130, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1,
+					Text = inst.Name, TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 12,
+					TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+				}, r)
+				shown[i] = { inst = inst, lbl = lbl }
+				miniBtn(r, "Git", -118, function()
+					local o = ents[inst]
+					if o and o.part then teleportTo(CFrame.new(itemPos(o) + Vector3.new(0, 3, 0))) end
+				end)
+				miniBtn(r, "Al", -60, function() task.spawn(collectOne, inst) end)
+			end
+		end
+		for _, e in ipairs(shown) do
+			local o = ents[e.inst]
+			if o and o.part and root then
+				e.lbl.Text = e.inst.Name .. "  " .. math.floor((itemPos(o) - root.Position).Magnitude + 0.5) .. " stud"
+			end
+		end
+	end
+	addButton(pItem, "🔄  Listeyi yenile", function() X.refreshEnt(); task.delay(0.6, refreshList, true) end)
+	task.spawn(function()
+		while true do
+			task.wait(1)
+			if main.Visible and pItem.Visible then pcall(refreshList) end
+		end
+	end)
+end
+
 -- SUNUCU / LOG
 do
 	local bar = new("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1 }, pLog)
@@ -1229,14 +1462,12 @@ addToggle(pVis, "Varlık highlight (humanoid / tehlikeli)", true, function(v) S.
 addToggle(pVis, "Kapıları göster", true, function(v) S.entDoor = v; X.refreshEnt() end, "entDoor")
 addToggle(pVis, "Kapı highlight (en yakın 24, her mesafe)", true, function(v) S.entDoorHl = v end, "entDoorHl")
 addToggle(pVis, "Dolap / saklanma yerlerini göster", true, function(v) S.entHide = v; X.refreshEnt() end, "entHide")
-addToggle(pVis, "Eşyaları göster", false, function(v) S.entItem = v; X.refreshEnt() end, "entItem")
 addToggle(pVis, "Kapı/dolap highlight (en fazla ~31)", false, function(v) S.entObjHl = v end, "entObjHl")
 addSlider(pVis, "Kapı/dolap/eşya max mesafe", 20, 1000, S.objMax, function(v) S.objMax = v end, 10, "objMax")
 addToggle(pVis, "Sesli uyarı (yeni varlık)", true, function(v) S.soundOn = v end, "soundOn")
 addTextBox(pVis, "Tehlikeli:", S.entDanger, function(t) S.entDanger = t; X.refreshEnt() end, "entDanger")
 addTextBox(pVis, "Kapı:", S.entDoors, function(t) S.entDoors = t; X.refreshEnt() end, "entDoors")
 addTextBox(pVis, "Dolap:", S.entHides, function(t) S.entHides = t; X.refreshEnt() end, "entHides")
-addTextBox(pVis, "Eşya:", S.entItems, function(t) S.entItems = t; X.refreshEnt() end, "entItems")
 addTextBox(pVis, "Yoksay:", S.entIgnore, function(t) S.entIgnore = t; X.refreshEnt() end, "entIgnore")
 addButton(pVis, "Takip edilenleri temizle", clearEntities)
 addSection(pVis, "Debug")
@@ -1330,7 +1561,7 @@ addSection(pSet, "Ayarları kaydet")
 do
 	local FILE = "HunterPanel_settings.json"
 	local canFile = typeof(writefile) == "function" and typeof(readfile) == "function"
-	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true }
+	local NO_SAVE = { flyOn = true, noclip = true, hbViz = true, autoCollect = true }
 
 	local function encode()
 		local data = { theme = X.themeIndex, v = {} }
@@ -1405,6 +1636,7 @@ end, "bad")
 
 selectTab("Oyuncu")
 X.load(true)
+X.refreshKill()
 
 ------------------------------------------------------------------
 -- SUNUCUDAN GELEN MESAJLAR
